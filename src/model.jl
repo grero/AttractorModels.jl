@@ -63,7 +63,7 @@ function bump!(impulse::Observable{T}, x=0.05, dt=0.1) where T <: Real
     impulse[] = p
 end
 
-function run_model(;σn::Float64=0.01, bump_amp=0.01, bump_time=20, bump_dur=2, nframes=100,x0=x1, y0=y1,fname="trajectory.mp4", rseed=UInt32(1236))
+function run_model(;σn::Float64=0.01, bump_amp=0.01, bump_time=20, bump_dur=2, nframes=100,x0=x1, y0=y1,fname="trajectory.mp4", rseed=UInt32(1236),ntrials=1)
     RNG = StableRNG(rseed)
     xx = range(-10, stop=20.0, length=100)
     yy = range(-25, stop=5.0, length=100) 
@@ -74,9 +74,19 @@ function run_model(;σn::Float64=0.01, bump_amp=0.01, bump_time=20, bump_dur=2, 
     cb = Colorbar(fig[1,2], cf, label="Potential")
     sc = scatter!(ax,[x0], [y0]) 
     impulse = 0.0
-    record(fig, fname, 1:nframes) do i
-        if bump_time <= i < bump_time+bump_dur
-            j = i-bump_time
+    curvex = Float64[]
+    curvey = Float64[]
+    record(fig, fname, 1:ntrials*nframes) do i
+        kk = rem(i-1, nframes) + 1
+        if kk == 1
+            x0 = 0.1*randn(RNG) + x1
+            y0 = 0.1*randn(RNG) + y1
+            #indcate trial start
+            push!(curvex, NaN)
+            push!(curvey, NaN)
+        end
+        if bump_time <= kk < bump_time+bump_dur
+            j = kk-bump_time
             if  j < bump_dur/2
                 b = b0 - 2*(b0 - bump_amp)*j/bump_dur 
             else
@@ -98,7 +108,10 @@ function run_model(;σn::Float64=0.01, bump_amp=0.01, bump_time=20, bump_dur=2, 
         y0 += a*Δ[2]+qn[2]
         sc[1] = [x0]
         sc[2] = [y0]
+        push!(curvex, x0)
+        push!(curvey, y0)
      end
+     curvex, curvey
 end
 
 impulse = Observable(0.0f0)
