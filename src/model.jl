@@ -122,7 +122,7 @@ function plot_potential!(ax, n=100)
     cf = contour!(ax, xx, yy, [f(_x,_y) for _x in xx, _y in yy], levels=15)
 end
 
-function run_model(;σn::Float64=0.01, bump_amp=0.01, bump_time=20, bump_dur=2, nframes=100,x0=x1, y0=y1,fname="trajectory.mp4", rseed=UInt32(1236),ntrials=1)
+function run_model(;σn::Float64=0.01, bump_amp=0.01, bump_time=20, bump_dur=2, nframes=100,x0=x1, y0=y1,fname="trajectory.mp4", rseed=UInt32(1236),ntrials=1, no_noise_after_bump=false)
     RNG = StableRNG(rseed)
     xx = range(-10, stop=20.0, length=100)
     yy = range(-25, stop=5.0, length=100) 
@@ -162,7 +162,11 @@ function run_model(;σn::Float64=0.01, bump_amp=0.01, bump_time=20, bump_dur=2, 
         #Δ ./= q
         #a = min(max(0.01/q, 0.01), 1.0)
         a = 1.0
-        qn = σn*randn(RNG, 2)
+        if kk > bump_time + bump_dur && no_noise_after_bump
+            qn = fill(0.0,2)
+        else
+            qn = σn*randn(RNG, 2)
+        end
         x0 += a*Δ[1]+qn[1]
         y0 += a*Δ[2]+qn[2]
         sc[1] = [x0]
