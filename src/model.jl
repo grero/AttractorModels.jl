@@ -198,7 +198,56 @@ function compute_pathlength(curves::Vector{Matrix{Float64}}, bump_time::Int64)
     L
 end
 
-function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64},idx0=30)
+function find_reaction_time(curvex, curvey, idx0;a=0.05)
+    pidx = findall(isnan, curvex)
+    curves = [[curvex[pp0+1:pp1-1] curvey[pp0+1:pp1-1]] for (pp0,pp1) in zip(pidx[1:end-1], pidx[2:end])]
+    rt = fill(0.0, length(curves)) 
+    path_length = fill(0.0, length(curves), 10*size(curves[1],1))
+    for (ii,curve) in enumerate(curves)
+        spl = ParametricSpline(permutedims(curve[idx0:end,:], [2,1]))
+        curvep = Dierckx.evaluate(spl, range(extrema(spl.t)...;length=10*length(spl.t)))
+        for jj in 2:size(curvep,2)
+            path_length[ii,jj] = path_length[ii,jj-1] + sqrt(sum(abs2, curvep[:,jj] .- curvep[:,jj-1]))
+            d = sqrt(sum(abs2, curvep[:,jj] .- [x2,y2]))
+            if d < a*sqrt(w2)
+                rt[ii] = path_length[ii,jj]
+                break
+            end
+        end
+    end
+    rt, path_length
+end
+
+function estimate_rt_fit(rt, curvex, curvey,C,σh,nruns)
+    tidx = findall(rt .> 0.0)
+    lrt = log.(rt[tidx])
+    lrt .-= mean(lrt)
+
+    pidx = findall(isnan, curvex)
+    curves = [[curvex[pp0+1:pp1-1] curvey[pp0+1:pp1-1]] for (pp0,pp1) in zip(pidx[1:end-1], pidx[2:end])]
+
+    Y = fill(0.0,size(curves[1],1), size(C,1),length(curves) )
+    r² = fill(0.0, size(Y,1), nruns)
+    p = size(C,1)
+    n = length(tidx)
+    for r in 1:nruns
+        for (ii,curve) in enumerate(curves)
+            Y[:,:,ii] = curve*C' + σh*randn(size(curve,1), size(C,1))
+        end
+
+        for i in 1:size(Y,1)
+            X2 = permutedims(Y[i,:,tidx], [2,1])
+            X2 .-= mean(X2,dims=1)
+            β = llsq(X2, lrt;bias=false)
+            prt = X2*β
+            # adjusted r-square
+            r²[i,r] = 1.0 - (n-1)*sum(abs2, prt .- lrt)./(sum(abs2, lrt)*(n-p-1))
+        end
+    end
+    r²
+end
+
+function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64},idx0=30;cidx=[1,4,7],σh=0.01)
     # create vector of matrices, one for each trial
     pidx = findall(isnan, curvex)
     curves = [[curvex[pp0+1:pp1-1] curvey[pp0+1:pp1-1]] for (pp0,pp1) in zip(pidx[1:end-1], pidx[2:end])]
@@ -231,7 +280,6 @@ function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64},idx0=30)
     # for the 3D lines, we first interpolate, so that we can generate higher resolution lines
     sidx = 0
     eeidx = fill(0, length(curves))
-    cidx = [1, 4,7]
     path_length = fill(0.0, length(curves))
     for (ii,curve) in enumerate(curves)
         d = sqrt.(dropdims(sum(abs2, curve[idx0:end,:] .- permutedims(repeat([x2,y2],1,1)),dims=2),dims=2))
@@ -257,8 +305,14 @@ function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64},idx0=30)
     @show sum(eeidx .== 0)
     σ = fill(0.0, size(curves[1],1))
     r² = fill(.0, size(curves[1],1))
+    r²f = fill(.0, size(curves[1],1))
     lrt = log.(eeidx[tidx])
     lrt .-= mean(lrt)
+    # orthonormal projection matrix
+    C = [-0.05731886757555693 0.1744424143914799; 0.040691961024305695 -0.7875198033095916; 0.044925581638064885 0.32159086406501836; 0.5066975851520004 -0.04061244681329518; -0.35105062675820853 -0.26847006960198877; 0.6317443882176936 0.19522320925996628; -0.46255858704772257 0.3662295305739127]
+   
+    r²f = estimate_rt_fit(eeidx, curvex, curvey, C, σh, 100)
+    n = length(tidx)
     for i in 1:size(curves[1],1)
         _curves = cat([curve[i:i,:] for curve in curves]...,dims=1)
         # regress "reaction time"
@@ -266,7 +320,8 @@ function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64},idx0=30)
         X .-= mean(X,dims=1)
         β = llsq(X, lrt;bias=false)
         prt = X*β
-        r²[i] = 1.0 - sum(abs2, prt .- lrt)./sum(abs2, lrt)
+        #adjusted r-square
+        r²[i] = 1.0 - (n-1)*sum(abs2, prt .- lrt)./(sum(abs2, lrt)*(n-2-1))
         Σ = cov(_curves)
         u,s,v = svd(Σ)
         σ[i] = sum(s)
@@ -310,8 +365,14 @@ function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64},idx0=30)
     ax3.yticklabelsvisible = false
     bidx = idx0:(idx0+minimum(eeidx)-1)
     tt = range(0.0, stop=1.0, length=minimum(eeidx[tidx]))
-    lines!(ax2, tt, σ[idx0:idx0+minimum(eeidx[tidx])-1])
-    lines!(ax22, tt, r²[idx0:idx0+minimum(eeidx[tidx])-1])
+    bidx = idx0:(idx0+minimum(eeidx[tidx])-1)
+    lines!(ax2, tt, σ[bidx], color=Cycled(2))
+    hlines!(ax2, size(C,1)*sqrt(σh), color=Cycled(1))
+    μ = dropdims(mean(r²f, dims=2),dims=2)
+    σ = dropdims(std(r²f, dims=2),dims=2)
+    fill_between!(ax22, tt, (μ-σ)[bidx], (μ+σ)[bidx])
+    lines!(ax22, tt, μ[bidx])
+    lines!(ax22, tt, r²[bidx])
     rowsize!(fig.layout, 2, Relative(0.3))
     pcolors = fill(RGB(0.0, 0.0, 0.0), length(path_length))
     pcolors[cidx] .= ax3.palette.color[][2:4]
