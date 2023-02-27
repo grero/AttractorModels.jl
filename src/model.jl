@@ -3,11 +3,18 @@ using LinearAlgebra
 using Makie
 using GLMakie
 using Makie: Point2f0
+using Colors
 using StableRNGs
+using Dierckx
+using Statistics
+using MultivariateStats
 
+#TODO: Extend this to higher dimenions
+#      First do 3D,i.e. 3 units instead of 2. In that case, we can't really illustrate the potential, but we can plot the 3D trajectories along with the surface of the potenial.
 
 b0 = 4.0
 x1,y1 = (-5.0, -5.0)
+w1 = 9.0
 x0n,y0n = (-5.0, -5.0)
 z(d) = cos(2π*d/10)
 z(x,y) = z(sqrt((x-5.0)^2+(y-5.0)^2))
@@ -187,29 +194,80 @@ function compute_pathlength(curves::Vector{Matrix{Float64}}, bump_time::Int64)
     L
 end
 
-function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64})
+function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64},idx0=30)
     # create vector of matrices, one for each trial
     pidx = findall(isnan, curvex)
     curves = [[curvex[pp0+1:pp1-1] curvey[pp0+1:pp1-1]] for (pp0,pp1) in zip(pidx[1:end-1], pidx[2:end])]
     w = 30*72/2.5
     h = w
     fig = Figure(resolution=(w,h))
-    ax1 = Axis3(fig[1,1])
+    lg1 = GridLayout()
+    fig[1,1] = lg1
+    ax1 = Axis3(lg1[1,1])
+    lg2 = GridLayout() 
+    fig[2,1] = lg2
+    lg3 = lg2[1,2]
+    ax2 = Axis(lg3[1,1])
+    ax22 = Axis(lg3[2,1])
+    linkxaxes!(ax2, ax22)
+    ax3 = Axis(lg2[1,1])
+    ax4 = Axis(lg2[1,3])
+    colsize!(lg2, 3, Relative(0.1))
     xx = range(-10, stop=20.0, length=200)
     yy = range(-25, stop=5.0, length=200)
     colormap = :bwr
+    vidx = (x1-0.1*w1) .< xx .< (x2+0.1*w1)
+    vidy = (y2-0.1*w2) .< yy .< (y1+0.1*w2)
     sf = contour!(ax1, xx, yy, f; levels=15, colormap=colormap, colorrange=(-2.5, 2.5))
-    cb = Colorbar(fig[1,2], sf, label="Potential")
-    lines!(ax1, curvex, curvey, fill(0.0, length(curvex)), color="black")
+    contour!(ax3, xx[vidx], yy[vidy], f; levels=15, colormap=colormap, colorrange=(-2.5, 2.5))
+    cb = Colorbar(lg1[1,2], sf, label="Potential",labelsize=24, ticklabelsize=16,ticklabelsvisible=false)
+    #lines!(ax1, curvex[idx0:end], curvey[idx0:end], fill(0.0, length(curvex)-idx0+1), color="black")
     ff(x,y) = f(x,y) + 10.0
     surface!(ax1, xx, yy, ff, colormap=colormap)
     # for the 3D lines, we first interpolate, so that we can generate higher resolution lines
-    for curve in curves
-        spl = ParametricSpline(permutedims(curve, [2,1]))
-        curvep = evaluate(spl, range(extrema(spl.t)...;length=10*length(spl.t)))
-
+    sidx = 0
+    eeidx = fill(0, length(curves))
+    cidx = [1, 4,7]
+    path_length = fill(0.0, length(curves))
+    for (ii,curve) in enumerate(curves)
+        d = sqrt.(dropdims(sum(abs2, curve[idx0:end,:] .- permutedims(repeat([x2,y2],1,1)),dims=2),dims=2))
+        _eeidx = findfirst(d .< 0.01*sqrt(w2))
+        if _eeidx != nothing
+            eeidx[ii] = _eeidx
+        end
+        spl = ParametricSpline(permutedims(curve[idx0:end,:], [2,1]))
+        ssidx = searchsortedfirst(range(extrema(spl.t)...;length=10*length(spl.t)), (sidx-1)/size(curve,1))
+        curvep = Dierckx.evaluate(spl, range(extrema(spl.t)...;length=10*length(spl.t)))
+        d = sqrt.(dropdims(sum(abs2, curvep .- repeat([x2,y2],1,1),dims=1),dims=1))
+        _eeidx = findfirst(d .< 0.05*sqrt(w2))
+        path_length[ii] = sum(sqrt.(sum(abs2, diff(curvep[:,1:_eeidx],dims=2),dims=1)))
         lines!(ax1, curvep[1,:], curvep[2,:], ff.(curvep[1,:], curvep[2,:]), color="black", linewidth=2.0)
+        lines!(ax1, curvep[1,:], curvep[2,:], fill(0.0, size(curvep,2)), color="black")
+        if ii in cidx
+            jj = findfirst(cidx.==ii)
+            lines!(ax3, curvep[1,1:_eeidx], curvep[2,1:_eeidx], color=ax3.palette.color[][1+jj], linewidth=2.0)
+            scatter!(ax3, curvep[1,1:1], curvep[2,1:1], markersize=20px, color=ax3.palette.color[][1])
+        end
     end
+    tidx = findall(eeidx.!=0)
+    @show sum(eeidx .== 0)
+    σ = fill(0.0, size(curves[1],1))
+    r² = fill(.0, size(curves[1],1))
+    lrt = log.(eeidx[tidx])
+    lrt .-= mean(lrt)
+    for i in 1:size(curves[1],1)
+        _curves = cat([curve[i:i,:] for curve in curves]...,dims=1)
+        # regress "reaction time"
+        X = _curves[tidx,:]
+        X .-= mean(X,dims=1)
+        β = llsq(X, lrt;bias=false)
+        prt = X*β
+        r²[i] = 1.0 - sum(abs2, prt .- lrt)./sum(abs2, lrt)
+        Σ = cov(_curves)
+        u,s,v = svd(Σ)
+        σ[i] = sum(s)
+    end
+    sidx = argmax(σ)
     ax1.xticksvisible = false
     ax1.yticksvisible = false
     ax1.zticksvisible = false
@@ -218,6 +276,48 @@ function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64})
     ax1.zticklabelsvisible = false
     ax1.xlabel = "Neuron 1"
     ax1.ylabel = "Neuron 2"
+    ax1.xlabelsize=24
+    ax1.ylabelsize=24
+
+
+    for _ax in [ax2,ax22]
+        _ax.xgridvisible = false
+        _ax.ygridvisible = false
+        _ax.topspinevisible = false
+        _ax.rightspinevisible = false
+        _ax.xlabelsize=24
+        _ax.ylabelsize=24
+        _ax.xticklabelsvisible = false
+        _ax.yticklabelsvisible = false
+    end
+    ax2.ylabel = "Variance"
+    ax22.ylabel = "rt-pred"
+    ax22.xlabel = "Time"
+    ax22.yticklabelsvisible = true
+    ax3.xgridvisible = false
+    ax3.ygridvisible = false
+    ax3.topspinevisible = false
+    ax3.rightspinevisible = false
+    ax3.xlabelsize = 24
+    ax3.xlabel = "Neuron 1"
+    ax3.ylabelsize=24
+    ax3.ylabel = "Neuron 2"
+    ax3.xticklabelsvisible = false
+    ax3.yticklabelsvisible = false
+    bidx = idx0:(idx0+minimum(eeidx)-1)
+    tt = range(0.0, stop=1.0, length=minimum(eeidx[tidx]))
+    lines!(ax2, tt, σ[idx0:idx0+minimum(eeidx[tidx])-1])
+    lines!(ax22, tt, r²[idx0:idx0+minimum(eeidx[tidx])-1])
+    rowsize!(fig.layout, 2, Relative(0.3))
+    pcolors = fill(RGB(0.0, 0.0, 0.0), length(path_length))
+    pcolors[cidx] .= ax3.palette.color[][2:4]
+    scatter!(ax4, 1:length(path_length), path_length,color=pcolors, markersize=15px)
+    ax4.xticklabelsvisible = false
+    ax4.xgridvisible = false
+    ax4.ygridvisible = false
+    ax4.topspinevisible = false
+    ax4.rightspinevisible = false
+    ax4.ylabel = "Path length"
     fig
 end
 
