@@ -247,7 +247,7 @@ function estimate_rt_fit(rt, curvex, curvey,C,σh,nruns)
     r²
 end
 
-function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64},idx0=30;cidx=[1,4,7],σh=0.01)
+function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64},idx0=30;cidx=[1,4,7],σh=0.01, azimuth=4.868064813014487, elevation=0.37252146939403663)
     # create vector of matrices, one for each trial
     pidx = findall(isnan, curvex)
     curves = [[curvex[pp0+1:pp1-1] curvey[pp0+1:pp1-1]] for (pp0,pp1) in zip(pidx[1:end-1], pidx[2:end])]
@@ -259,20 +259,18 @@ function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64},idx0=30;ci
     ax1 = Axis3(lg1[1,1])
     lg2 = GridLayout() 
     fig[2,1] = lg2
-    lg3 = lg2[1,2]
+    lg3 = lg2[1,1]
     ax2 = Axis(lg3[1,1])
     ax22 = Axis(lg3[2,1])
     linkxaxes!(ax2, ax22)
-    ax3 = Axis(lg2[1,1])
-    ax4 = Axis(lg2[1,3])
-    colsize!(lg2, 3, Relative(0.1))
+    ax4 = Axis(lg2[1,2])
+    colsize!(lg2, 2, Relative(0.25))
     xx = range(-10, stop=20.0, length=200)
     yy = range(-25, stop=5.0, length=200)
     colormap = :bwr
     vidx = (x1-0.1*w1) .< xx .< (x2+0.1*w1)
     vidy = (y2-0.1*w2) .< yy .< (y1+0.1*w2)
     sf = contour!(ax1, xx, yy, f; levels=15, colormap=colormap, colorrange=(-2.5, 2.5))
-    contour!(ax3, xx[vidx], yy[vidy], f; levels=15, colormap=colormap, colorrange=(-2.5, 2.5))
     cb = Colorbar(lg1[1,2], sf, label="Potential",labelsize=24, ticklabelsize=16,ticklabelsvisible=false)
     #lines!(ax1, curvex[idx0:end], curvey[idx0:end], fill(0.0, length(curvex)-idx0+1), color="black")
     ff(x,y) = f(x,y) + 10.0
@@ -293,13 +291,16 @@ function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64},idx0=30;ci
         d = sqrt.(dropdims(sum(abs2, curvep .- repeat([x2,y2],1,1),dims=1),dims=1))
         _eeidx = findfirst(d .< 0.05*sqrt(w2))
         path_length[ii] = sum(sqrt.(sum(abs2, diff(curvep[:,1:_eeidx],dims=2),dims=1)))
-        lines!(ax1, curvep[1,:], curvep[2,:], ff.(curvep[1,:], curvep[2,:]), color="black", linewidth=2.0)
-        lines!(ax1, curvep[1,:], curvep[2,:], fill(0.0, size(curvep,2)), color="black")
+        #lines!(ax1, curvep[1,:], curvep[2,:], fill(0.0, size(curvep,2)), color="black")
         if ii in cidx
             jj = findfirst(cidx.==ii)
-            lines!(ax3, curvep[1,1:_eeidx], curvep[2,1:_eeidx], color=ax3.palette.color[][1+jj], linewidth=2.0)
-            scatter!(ax3, curvep[1,1:1], curvep[2,1:1], markersize=20px, color=ax3.palette.color[][1])
+            ppcolor = ax1.palette.color[][1+jj]
+            lines!(ax1, curvep[1,1:_eeidx], curvep[2,1:_eeidx],fill(0.0, length(_eeidx)), color=ppcolor, linewidth=2.0)
+            scatter!(ax1, curvep[1,1:1], curvep[2,1:1], [0.0], markersize=20px, color=ax1.palette.color[][1])
+        else
+            ppcolor = "black"
         end
+        lines!(ax1, curvep[1,:], curvep[2,:], ff.(curvep[1,:], curvep[2,:]), color=ppcolor, linewidth=2.0)
     end
     tidx = findall(eeidx.!=0)
     @show sum(eeidx .== 0)
@@ -335,6 +336,7 @@ function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64},idx0=30;ci
     ax1.zticklabelsvisible = false
     ax1.xlabel = "Neuron 1"
     ax1.ylabel = "Neuron 2"
+    ax1.zlabelvisible = false
     ax1.xlabelsize=24
     ax1.ylabelsize=24
 
@@ -353,16 +355,6 @@ function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64},idx0=30;ci
     ax22.ylabel = "rt-pred"
     ax22.xlabel = "Time"
     ax22.yticklabelsvisible = true
-    ax3.xgridvisible = false
-    ax3.ygridvisible = false
-    ax3.topspinevisible = false
-    ax3.rightspinevisible = false
-    ax3.xlabelsize = 24
-    ax3.xlabel = "Neuron 1"
-    ax3.ylabelsize=24
-    ax3.ylabel = "Neuron 2"
-    ax3.xticklabelsvisible = false
-    ax3.yticklabelsvisible = false
     bidx = idx0:(idx0+minimum(eeidx)-1)
     tt = range(0.0, stop=1.0, length=minimum(eeidx[tidx]))
     bidx = idx0:(idx0+minimum(eeidx[tidx])-1)
@@ -375,14 +367,18 @@ function plot_figure(curvex::Vector{Float64}, curvey::Vector{Float64},idx0=30;ci
     lines!(ax22, tt, r²[bidx])
     rowsize!(fig.layout, 2, Relative(0.3))
     pcolors = fill(RGB(0.0, 0.0, 0.0), length(path_length))
-    pcolors[cidx] .= ax3.palette.color[][2:4]
+    pcolors[cidx] .= ax1.palette.color[][2:4]
     scatter!(ax4, 1:length(path_length), path_length,color=pcolors, markersize=15px)
     ax4.xticklabelsvisible = false
     ax4.xgridvisible = false
     ax4.ygridvisible = false
     ax4.topspinevisible = false
     ax4.rightspinevisible = false
+    ax4.bottomspinevisible = false
+    ax4.xticksvisible = false
     ax4.ylabel = "Path length"
+    ax1.azimuth = azimuth
+    ax1.elevation = elevation
     fig
 end
 
