@@ -6,7 +6,7 @@ using CRC32c
 using ProgressMeter
 using LinearAlgebra
 using Makie
-using Makie: Point3f0
+using Makie: Point2f0, Point3f0
 
 function get_attractors(;w1=sqrt(5.0), w2=sqrt(7.0), wf=sqrt(3.5), A0=7.0, b=-4.0)
     Xi = [-5.0, -5.0] # start
@@ -222,6 +222,9 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
     surface!(ax, xx, yy, zz)
     meshscatter!(ax, X,markersize=0.25)
     lines!(ax, Xl,color="black")
+    lpoints = decompose(Point3f0, Circle(Point2f0(7.0,-13.0), 0.1*sqrt(60/2)))
+    lpoints .+= Point3f0(0.0, 0.0, zmin)
+    lines!(ax, lpoints)
     @async for i in 2:nframes
         if bump_time <= i < bump_time + bump_dur
             #TODO Also increase width here
