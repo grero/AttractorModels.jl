@@ -39,7 +39,7 @@ function get_attractors(;w1=sqrt(5.0), w2=sqrt(7.0), wf=sqrt(3.5), A0=7.0, b=-4.
 end
 
 
-function get_attractors2(;w1=sqrt(5.0), w2=sqrt(7.0), wf=sqrt(3.5), A0=7.0, b=-4.0, zmin=-3.2,ϵ2=2.0, ϵ1=ϵ2)
+function get_attractors2(;w1=sqrt(5.0), w2=sqrt(7.0), wf=sqrt(3.5), A0=7.0, b=-4.0, A2=7.0, zmin=-3.2,ϵ2=2.0, ϵ1=ϵ2)
     Xi = [-5.0, -5.0] # start
     Xe = [7.0, -13.0] # end
     v = Xe - Xi # vector from start to end
@@ -60,12 +60,12 @@ function get_attractors2(;w1=sqrt(5.0), w2=sqrt(7.0), wf=sqrt(3.5), A0=7.0, b=-4
     Σb[1,1] = wf²
     Σb[2,2] = wf²/ϵ2^2
     Σb = R*Σb*R'
-    f1,g1 = get_combined_potential(Σ, Σb, Xi, A0, b, zmin)
+    f1,g1,init_func = get_combined_potential(Σ, Σb, Xi, A0, b, zmin)
     # the end state 
     w2²= w2*w2
     Σe = [w2² 0.0; 0.0 w2²]
-    f2,g2 = get_potential(Σe, Xe, -A0)
-    (X,bb=b,s=1.0)->f1(X,bb,s)+f2(X,bb), (X,bb=b,s=1.0)->g1(X,bb,s)+g2(X,bb)
+    f2,g2 = get_potential(Σe, Xe, -A2)
+    (X,bb=b,s=1.0,bb2=-A2,ss=1.0)->f1(X,bb,s,ss)+f2(X,bb2), (X,bb=b,s=1.0,bb2=-A2,ss=1.0)->g1(X,bb,s,ss)+g2(X,bb2), init_func
 end
 
 function flat_bottom(Λ::Vector{Float64}, b::Float64, b0=0.8*b)
@@ -106,7 +106,9 @@ function get_combined_potential(Σ1::Matrix{Float64}, Σ2::Matrix{Float64}, Xi::
     P = ee.vectors
     #find a point on the ellipse where the value of 
     y2 = 0.0
-    function f1(X, b=A2, width_scale=1.0)
+    c = -2*log(zmin/A2)
+    init_func(q) = random_ellipse(Σ2,q*sqrt(c))
+    function f1(X, b=A2, width_scale=1.0,s=1.0)
         _Σ2i = Σ2i./width_scale
         d = Xi-X
         dp1 = d'*Σ1i*d
@@ -128,10 +130,10 @@ function get_combined_potential(Σ1::Matrix{Float64}, Σ2::Matrix{Float64}, Xi::
                 z2 = zmin
             end
         end
-        z1 + z2
+        s*(z1 + z2)
     end
 
-    function g1(X,b=A2, width_scale=1.0)
+    function g1(X,b=A2, width_scale=1.0,s=1.0)
         # we want to increase the width, which means decreasing the inverse
         _Σ2i = Σ2i./width_scale
         d = Xi-X
@@ -142,9 +144,9 @@ function get_combined_potential(Σ1::Matrix{Float64}, Σ2::Matrix{Float64}, Xi::
         if z2 <= zmin
             return [0.0, 0.0]
         end
-        -z1*(Σ1i + Σ1i')*d/2 - z2*(_Σ2i + _Σ2i')*d/2
+        s*(-z1*(Σ1i + Σ1i')*d/2 - z2*(_Σ2i + _Σ2i')*d/2)
     end
-    f1, g1
+    f1, g1, init_func
 end
 
 function get_trajectory(func::Function, gfunc::Function, X0::Vector{Float64},nframes=100,σn=0.0, dt=1.0;
@@ -170,27 +172,56 @@ function get_trajectory(func::Function, gfunc::Function, X0::Vector{Float64},nfr
     X
 end
 
+function random_ellipse(a,b, c)
+    x = -c*b .+ 2*c*b*rand()
+    ym = sqrt.(a*a*(c*c .- x.*x./b^2))
+    y = -ym .+ 2*ym.*rand()
+    x,y
+end
+
+function random_ellipse(Σ, c)
+    ee = eigen(Σ)
+    x,y = random_ellipse(1.0/sqrt(ee.values[1]),1.0/sqrt(ee.values[2]),c)
+    ee.vectors*[x,y]
+end
+
 function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, dt=1.0,
-                                           bump_amp=1.5, max_width_scale=2, bump_time=20, bump_dur=2,
-                                           b0=5.5,w0=1.0, rebound=true, ntrials=1)
+                                           bump_amp=1.5, max_width_scale=2, bump_time=20, bump_dur=2,well_min=0.0,basin_scale_min=1.0,
+                                           b0=5.5,w0=1.0, b20=0.01,b1=7.0, rebound=true, ntrials=1, freeze_before_bump=false,ifunc=(c)->c*randn(2),r0=2.0)
 
     xx =  -10:0.1:15.0
     yy = -25:0.1:0.0 
+    bs = Observable(1.0)
     b = Observable(-b0)
+    b2 = Observable(-b20)
     w = Observable(w0)
-    X0 = Observable([[-5.0, -5.0]+0.5*randn(2) for i in 1:ntrials])
-    zz = lift(b,w) do _b, _w
-        func.([[x,y] for x in xx, y in yy],_b, _w)
+    zmin = -1.1*well_min
+    X0 = Observable([[-5.0, -5.0] + ifunc(r0) for i in 1:ntrials])
+
+    zz = lift(b,w,b2,bs) do _b, _w,_b2,_bs
+        func.([[x,y] for x in xx, y in yy],_b, _w,_b2,_bs)
     end
-    X = lift(b,X0,w) do _b,_X0,_w
-        [Makie.Point3f0(_X[1], _X[2], func(_X,_b,_w)) for _X in _X0]
+    X = lift(b,X0,w,b2,bs) do _b,_X0,_w, _b2, _bs
+        [Makie.Point3f0(_X[1], _X[2], func(_X,_b,_w,_b2,_bs)) for _X in _X0]
+    end
+    Xl = Observable(cat([[Point3f0(_X0[1], _X0[2], zmin),Point3f0(NaN,NaN,NaN)] for _X0 in X0[]]...,dims=1))
+    pidx = [2:2:2*ntrials;]
+    on(X0) do _X0
+        _Xl = Xl[]
+        for (ii,_x0) in enumerate(_X0)
+            insert!(_Xl,  pidx[ii], Makie.Point3f0(_x0[1], _x0[2], zmin))
+            pidx[ii:end] .+= 1
+        end
+        Xl[] = _Xl
     end
 
     fig = Figure(resoltion=(500,500))
     ax = Axis3(fig[1,1])
+    zlims!(ax, zmin, maximum(zz[]))
     ax.title = "Frame 1/$nframes"
     surface!(ax, xx, yy, zz)
     meshscatter!(ax, X,markersize=0.25)
+    lines!(ax, Xl,color="black")
     @async for i in 2:nframes
         if bump_time <= i < bump_time + bump_dur
             #TODO Also increase width here
@@ -202,22 +233,28 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
             end
             if j < half_time 
                 b[] = -(b0 - (b0 - bump_amp)*j/half_time)
+                b2[] = -(b20 - (b20 - well_min)*j/half_time)
                 w[] = w0 - (w0 - max_width_scale)*j/half_time
+                bs[] = max(1.0 - (1.0 - basin_scale_min)*j/half_time, 0.0)
             else
                 b[] = -(bump_amp - (bump_amp-b0)*(j-half_time)/bump_dur)
+                b2[] = -(well_min - (well_min-b20)*(j-half_time)/bump_dur)
                 # can this become negative
                 w[] = max_width_scale - (max_width_scale-w0)*(j-half_time)/bump_dur
+                bs[] = max(basin_scale_min - (basin_scale_min-1.0)*(j-half_time)/bump_dur, 0.0)
             end
         else
             #b[] = -b0
             #w[] = w0
         end
         _X0 = X0[]
-        for _x0 in _X0
-            ΔX = gfunc(_x0, b[],w[])
-            _x0 .= _x0 + ΔX*dt + σn*randn(2)
+        if !freeze_before_bump || i >= bump_time+bump_dur
+            for _x0 in _X0
+                ΔX = gfunc(_x0, b[],w[],b2[],bs[])
+                _x0 .= _x0 + ΔX*dt + σn*randn(2)
+            end
+            X0[] = _X0
         end
-        X0[] = _X0
         yield()
         sleep(0.1)
         ww = round(w[],sigdigits=2)
