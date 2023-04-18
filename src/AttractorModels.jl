@@ -191,11 +191,13 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
 
     xx =  -10:0.1:15.0
     yy = -25:0.1:0.0 
+    rtimes = Observable(fill(NaN, ntrials))
     bs = Observable(1.0)
     b = Observable(-b0)
     b2 = Observable(-b20)
     w = Observable(w0)
     zmin = -1.1*well_min
+    tt = 0.0
     X0 = Observable([[-5.0, -5.0] + ifunc(r0) for i in 1:ntrials])
 
     zz = lift(b,w,b2,bs) do _b, _w,_b2,_bs
@@ -208,14 +210,21 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
     pidx = [2:2:2*ntrials;]
     on(X0) do _X0
         _Xl = Xl[]
+        _rtimes = rtimes[]
         for (ii,_x0) in enumerate(_X0)
             insert!(_Xl,  pidx[ii], Makie.Point3f0(_x0[1], _x0[2], zmin))
+            if sum(abs2, _x0 - [7.0,-13.0]) <= 0.01*35.0
+                if isnan(_rtimes[ii] )
+                    _rtimes[ii] = tt
+                end
+            end
             pidx[ii:end] .+= 1
         end
+        rtimes[] = _rtimes
         Xl[] = _Xl
     end
 
-    fig = Figure(resoltion=(500,500))
+    fig = Figure(resoltion=(700,700))
     ax = Axis3(fig[1,1])
     zlims!(ax, zmin, maximum(zz[]))
     ax.title = "Frame 1/$nframes"
@@ -225,6 +234,17 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
     lpoints = decompose(Point3f0, Circle(Point2f0(7.0,-13.0), 0.1*sqrt(60/2)))
     lpoints .+= Point3f0(0.0, 0.0, zmin)
     lines!(ax, lpoints)
+    ax2 = Axis(fig[1,2])
+    colsize!(fig.layout,1,Relative(0.7))
+    scatter!(ax2, 1:ntrials, rtimes)
+    ax2.xgridvisible=false
+    ax2.ygridvisible=false
+    ax2.rightspinevisible=false
+    ax2.topspinevisible=false
+    ax2.xlabel = "Trial"
+    ax2.ylabel = "Reaction time"
+    xlims!(ax2, 0.0,ntrials+1)
+    ylims!(ax2, 0.0, nframes*dt)
     @async for i in 2:nframes
         if bump_time <= i < bump_time + bump_dur
             #TODO Also increase width here
@@ -263,6 +283,7 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
         ww = round(w[],sigdigits=2)
         bb = round(b[], sigdigits=2)
         ax.title = "Frame $i/$nframes width=$(ww) height=$(bb)"
+        tt += dt
     end
     fig
 end
