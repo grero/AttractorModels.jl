@@ -202,7 +202,7 @@ end
 function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, dt=1.0,
                                            bump_amp=1.5, max_width_scale=2, bump_time=20, bump_dur=2,well_min=0.0,basin_scale_min=1.0,
                                            b0=5.5,w0=1.0, b20=0.01,b1=7.0, rebound=true, ntrials=1, freeze_before_bump=false,ifunc=(c)->c*randn(2),r0=2.0,
-                                           do_save=false,zmin_f=-3.2,zf0=-3.2, ϵf=1.0,ϵ0=2.5)
+                                           do_save=false,do_record=false,zmin_f=-3.2,zf0=-3.2, ϵf=1.0,ϵ0=2.5)
 
     xx =  -10:0.1:15.0
     yy = -25:0.1:0.0 
@@ -242,7 +242,7 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
     end
 
     fig = Figure(resolution=(1024,768))
-    ax = Axis3(fig[1,1])
+    ax = Axis3(fig[1,1], azimuth=4.424342889186364, elevation=0.5030970309174743)
     zlims!(ax, zmin, maximum(zz[]))
     ax.title = "Frame 1/$nframes"
     surface!(ax, xx, yy, zz)
@@ -262,8 +262,35 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
     ax2.ylabel = "Reaction time"
     xlims!(ax2, 0.0,ntrials+1)
     ylims!(ax2, 0.0, nframes*dt)
-    @async begin
-        for i in 2:nframes
+    rfunc1(f,fig,vidx) = record(f,fig,"a_cool_movie.mp4",vidx)
+    function rfunc2(f,fig,vidx)
+        @async begin
+            for i in vidx
+                f(i)
+            end
+            if do_save
+                # extract the curves
+                curvex = [x[1] for x in Xl[]]
+                curvey = [x[2] for x in Xl[]]
+                JLD2.save("model_output_new.jld2", Dict("curvex"=>curvex,
+                                                    "curvey"=>curvey,
+                                                    "bump_amp"=>bump_amp,
+                                                    "bunmp_dur"=>bump_dur,
+                                                    "σn"=>σn,
+                                                    "bump_time"=>bump_time,
+                                                    "ntrials"=>ntrials,
+                                                    "nframes"=>nframes,
+                                                    "rtimes"=>rtimes[]))
+
+            end
+        end
+    end
+    if do_record
+        rfunc = rfunc1
+    else
+        rfunc = rfunc2
+    end
+    rfunc(fig,1:nframes) do i
             if bump_time <= i < bump_time + bump_dur
                 #TODO Also increase width here
                 j = i - bump_time+1
@@ -307,21 +334,6 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
             bb = round(b[], sigdigits=2)
             ax.title = "Frame $i/$nframes width=$(ww) height=$(bb)"
             tt += dt
-        end
-        if do_save
-            # extract the curves
-            curvex = [x[1] for x in Xl[]]
-            curvey = [x[2] for x in Xl[]]
-            JLD2.save("model_output.jld2", Dict("curvex"=>curvex,
-                                                "curvey"=>curvey,
-                                                "bump_amp"=>bump_amp,
-                                                "bunmp_dur"=>bump_dur,
-                                                "σn"=>σn,
-                                                "bump_time"=>bump_time,
-                                                "ntrials"=>ntrials,
-                                                "nframes"=>nframes,
-                                                "rtimes"=>rtimes[]))
-        end
     end
     fig
 end
