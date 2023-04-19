@@ -39,12 +39,14 @@ function get_attractors(;w1=sqrt(5.0), w2=sqrt(7.0), wf=sqrt(3.5), A0=7.0, b=-4.
 end
 
 
-function get_attractors2(;w1=sqrt(5.0), w2=sqrt(7.0), wf=sqrt(3.5), A0=7.0, b=-4.0, A2=7.0, zmin=-3.2,ϵ2=2.0, ϵ1=ϵ2)
+function get_attractors2(;w1=sqrt(5.0), w2=sqrt(7.0), wf=sqrt(3.5), A0=7.0, b=-4.0, A2=7.0, zmin=-3.2,ϵ2=2.0, ϵ1=ϵ2,ϕ=π/2)
     Xi = [-5.0, -5.0] # start
     Xe = [7.0, -13.0] # end
     v = Xe - Xi # vector from start to end
     v ./= norm(v)
-    n = nullspace(adjoint(v)) # vector normal to v
+    #n = nullspace(adjoint(v)) # vector normal to v
+    Rn = [cos(ϕ) -sin(ϕ);sin(ϕ) cos(ϕ)]
+    n = Rn*v
     # get a covariance matrix with more covariance along `n` than `v`
     θ = atan(n[2], n[1])
     R = [cos(θ) -sin(θ);sin(θ) cos(θ)] #Rotation matrix
