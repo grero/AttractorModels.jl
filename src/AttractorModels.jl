@@ -213,7 +213,7 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
     w = Observable(w0)
     zf = Observable(-zf0)
     ϵ = Observable(ϵ0)
-    zmin = -1.1*well_min
+    zmin = -1.2*well_min
     tt = 0.0
     X0 = Observable([[-5.0, -5.0] + ifunc(r0) for i in 1:ntrials])
 
