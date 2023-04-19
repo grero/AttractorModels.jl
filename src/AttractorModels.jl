@@ -65,7 +65,7 @@ function get_attractors2(;w1=sqrt(5.0), w2=sqrt(7.0), wf=sqrt(3.5), A0=7.0, b=-4
     w2²= w2*w2
     Σe = [w2² 0.0; 0.0 w2²]
     f2,g2 = get_potential(Σe, Xe, -A2)
-    (X,bb=b,s=1.0,bb2=-A2,ss=1.0)->f1(X,bb,s,ss)+f2(X,bb2), (X,bb=b,s=1.0,bb2=-A2,ss=1.0)->g1(X,bb,s,ss)+g2(X,bb2), init_func
+    (X,bb=b,s=1.0,bb2=-A2,ss=1.0,zm=zmin,ee=ϵ2)->f1(X,bb,s,ss,zm,ee)+f2(X,bb2), (X,bb=b,s=1.0,bb2=-A2,ss=1.0,zm=zmin,ee=ϵ2)->g1(X,bb,s,ss,zm,ee)+g2(X,bb2), init_func
 end
 
 function flat_bottom(Λ::Vector{Float64}, b::Float64, b0=0.8*b)
@@ -102,22 +102,29 @@ function get_combined_potential(Σ1::Matrix{Float64}, Σ2::Matrix{Float64}, Xi::
     Σ1i = inv(Σ1)
     Σ2i = inv(Σ2)
     ee = eigen(Σ2i)
+    ϵ2 = sqrt(ee.values[2]/ee.values[1])
+    ee1 = eigen(Σ1i)
     Λ = ee.values 
     P = ee.vectors
     #find a point on the ellipse where the value of 
     y2 = 0.0
     c = -2*log(zmin/A2)
     init_func(q) = random_ellipse(Σ2,q*sqrt(c))
-    function f1(X, b=A2, width_scale=1.0,s=1.0)
+    function f1(X, b=A2, width_scale=1.0,s=1.0,zm=zmin,ϵ=ϵ2)
+        if ϵ != ϵ2
+            # reshape the matrices
+            Σ2i .= ee.vectors*diagm([ee.values[1],ee.values[1]*ϵ^2])*ee.vectors'
+            Σ1i .= ee1.vectors*diagm([ee1.values[1],ee1.values[1]*ϵ^2])*ee1.vectors'
+        end
         _Σ2i = Σ2i./width_scale
         d = Xi-X
         dp1 = d'*Σ1i*d
         z1 = A1*exp(-dp1/2.0)
         z2 = b*exp(-d'*_Σ2i*d/2.0)
         #@info "c" zmin b 
-        if b < zmin
+        if (b < zm) && (zm < 0.0) && (abs(b)/abs(A1) > 0.01)
             # find dᵗΣ⁻¹d corresponding to the value zmin; we won't allow the potential to dip below zmin here 
-            c = -2*log(zmin/b)
+            c = -2*log(zm/b)
             # we just need a single point on the ellipse, so set y₁=0 and solve for y₂.
             y1 = sqrt(width_scale*c/ee.values[1])
             # we solved y₂ in a system where the inverse covariance matrix was diagnoal, so transform back
@@ -127,21 +134,26 @@ function get_combined_potential(Σ1::Matrix{Float64}, Σ2::Matrix{Float64}, Xi::
             z1min = A1*exp(-dp2/2.0) 
             if dp1 < dp2
                 z1 = z1min
-                z2 = zmin
+                z2 = zm
             end
         end
         s*(z1 + z2)
     end
 
-    function g1(X,b=A2, width_scale=1.0,s=1.0)
+    function g1(X,b=A2, width_scale=1.0,s=1.0,zm=zmin,ϵ=ϵ2)
         # we want to increase the width, which means decreasing the inverse
+        if ϵ != ϵ2
+            # reshape the matrices
+            Σ2i .= ee.vectors*diagm([ee.values[1],ee.values[1]*ϵ^2])*ee.vectors'
+            Σ1i .= ee1.vectors*diagm([ee1.values[1],ee1.values[1]*ϵ^2])*ee1.vectors'
+        end
         _Σ2i = Σ2i./width_scale
         d = Xi-X
         dd1 = d'*Σ1i*d
         dd2 = d'*_Σ2i*d
         z1 = A1*exp(-dd1/2.0)
         z2 = b*exp(-dd2/2.0)
-        if z2 <= zmin
+        if (z2 <= zm) &&  (abs(b)/abs(A1) > 0.01)
             return [0.0, 0.0]
         end
         s*(-z1*(Σ1i + Σ1i')*d/2 - z2*(_Σ2i + _Σ2i')*d/2)
@@ -187,7 +199,8 @@ end
 
 function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, dt=1.0,
                                            bump_amp=1.5, max_width_scale=2, bump_time=20, bump_dur=2,well_min=0.0,basin_scale_min=1.0,
-                                           b0=5.5,w0=1.0, b20=0.01,b1=7.0, rebound=true, ntrials=1, freeze_before_bump=false,ifunc=(c)->c*randn(2),r0=2.0)
+                                           b0=5.5,w0=1.0, b20=0.01,b1=7.0, rebound=true, ntrials=1, freeze_before_bump=false,ifunc=(c)->c*randn(2),r0=2.0,
+                                           do_save=false,zmin_f=-3.2,zf0=-3.2, ϵf=1.0,ϵ0=2.5)
 
     xx =  -10:0.1:15.0
     yy = -25:0.1:0.0 
@@ -196,15 +209,17 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
     b = Observable(-b0)
     b2 = Observable(-b20)
     w = Observable(w0)
+    zf = Observable(-zf0)
+    ϵ = Observable(ϵ0)
     zmin = -1.1*well_min
     tt = 0.0
     X0 = Observable([[-5.0, -5.0] + ifunc(r0) for i in 1:ntrials])
 
-    zz = lift(b,w,b2,bs) do _b, _w,_b2,_bs
-        func.([[x,y] for x in xx, y in yy],_b, _w,_b2,_bs)
+    zz = lift(b,w,b2,bs,zf,ϵ) do _b, _w,_b2,_bs,_zf, _ϵ
+        func.([[x,y] for x in xx, y in yy],_b, _w,_b2,_bs,_zf,_ϵ)
     end
-    X = lift(b,X0,w,b2,bs) do _b,_X0,_w, _b2, _bs
-        [Makie.Point3f0(_X[1], _X[2], func(_X,_b,_w,_b2,_bs)) for _X in _X0]
+    X = lift(b,X0,w,b2,bs,zf,ϵ) do _b,_X0,_w, _b2, _bs, _zf,_ϵ
+        [Makie.Point3f0(_X[1], _X[2], func(_X,_b,_w,_b2,_bs,_zf,_ϵ)) for _X in _X0]
     end
     Xl = Observable(cat([[Point3f0(_X0[1], _X0[2], zmin),Point3f0(NaN,NaN,NaN)] for _X0 in X0[]]...,dims=1))
     pidx = [2:2:2*ntrials;]
@@ -224,7 +239,7 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
         Xl[] = _Xl
     end
 
-    fig = Figure(resoltion=(700,700))
+    fig = Figure(resolution=(1024,768))
     ax = Axis3(fig[1,1])
     zlims!(ax, zmin, maximum(zz[]))
     ax.title = "Frame 1/$nframes"
@@ -245,45 +260,66 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
     ax2.ylabel = "Reaction time"
     xlims!(ax2, 0.0,ntrials+1)
     ylims!(ax2, 0.0, nframes*dt)
-    @async for i in 2:nframes
-        if bump_time <= i < bump_time + bump_dur
-            #TODO Also increase width here
-            j = i - bump_time
-            if rebound
-                half_time = bump_dur/2
+    @async begin
+        for i in 2:nframes
+            if bump_time <= i < bump_time + bump_dur
+                #TODO Also increase width here
+                j = i - bump_time+1
+                if rebound
+                    half_time = bump_dur/2
+                else
+                    half_time = bump_dur
+                end
+                if j <= half_time 
+                    b[] = -(b0 - (b0 - bump_amp)*j/half_time)
+                    b2[] = -(b20 - (b20 - well_min)*j/half_time)
+                    w[] = w0 - (w0 - max_width_scale)*j/half_time
+                    bs[] = max(1.0 - (1.0 - basin_scale_min)*j/half_time, 0.0)
+                    zf[] = -(zf0 - (zf0 - zmin_f)*j/half_time)
+                    ϵ[] = ϵ0 - (ϵ0 - ϵf)*j/half_time
+
+                else
+                    b[] = -(bump_amp - (bump_amp-b0)*(j-half_time)/bump_dur)
+                    b2[] = -(well_min - (well_min-b20)*(j-half_time)/bump_dur)
+                    # can this become negative
+                    w[] = max_width_scale - (max_width_scale-w0)*(j-half_time)/bump_dur
+                    bs[] = max(basin_scale_min - (basin_scale_min-1.0)*(j-half_time)/bump_dur, 0.0)
+                    zf[] = -(zmin_f - (zmin_f-zf0)*(j-half_time)/bump_dur)
+                    ϵ[] = ϵf - (ϵf-ϵ0)*(j-half_time)/bump_dur
+                end
             else
-                half_time = bump_dur
+                #b[] = -b0
+                #w[] = w0
             end
-            if j < half_time 
-                b[] = -(b0 - (b0 - bump_amp)*j/half_time)
-                b2[] = -(b20 - (b20 - well_min)*j/half_time)
-                w[] = w0 - (w0 - max_width_scale)*j/half_time
-                bs[] = max(1.0 - (1.0 - basin_scale_min)*j/half_time, 0.0)
-            else
-                b[] = -(bump_amp - (bump_amp-b0)*(j-half_time)/bump_dur)
-                b2[] = -(well_min - (well_min-b20)*(j-half_time)/bump_dur)
-                # can this become negative
-                w[] = max_width_scale - (max_width_scale-w0)*(j-half_time)/bump_dur
-                bs[] = max(basin_scale_min - (basin_scale_min-1.0)*(j-half_time)/bump_dur, 0.0)
+            _X0 = X0[]
+            if !freeze_before_bump || i >= bump_time+bump_dur
+                for _x0 in _X0
+                    ΔX = gfunc(_x0, b[],w[],b2[],bs[],zf[],ϵ[])
+                    _x0 .= _x0 + ΔX*dt + σn*randn(2)
+                end
+                X0[] = _X0
             end
-        else
-            #b[] = -b0
-            #w[] = w0
+            yield()
+            sleep(0.1)
+            ww = round(w[],sigdigits=2)
+            bb = round(b[], sigdigits=2)
+            ax.title = "Frame $i/$nframes width=$(ww) height=$(bb)"
+            tt += dt
         end
-        _X0 = X0[]
-        if !freeze_before_bump || i >= bump_time+bump_dur
-            for _x0 in _X0
-                ΔX = gfunc(_x0, b[],w[],b2[],bs[])
-                _x0 .= _x0 + ΔX*dt + σn*randn(2)
-            end
-            X0[] = _X0
+        if do_save
+            # extract the curves
+            curvex = [x[1] for x in Xl[]]
+            curvey = [x[2] for x in Xl[]]
+            JLD2.save("model_output.jld2", Dict("curvex"=>curvex,
+                                                "curvey"=>curvey,
+                                                "bump_amp"=>bump_amp,
+                                                "bunmp_dur"=>bump_dur,
+                                                "σn"=>σn,
+                                                "bump_time"=>bump_time,
+                                                "ntrials"=>ntrials,
+                                                "nframes"=>nframes,
+                                                "rtimes"=>rtimes[]))
         end
-        yield()
-        sleep(0.1)
-        ww = round(w[],sigdigits=2)
-        bb = round(b[], sigdigits=2)
-        ax.title = "Frame $i/$nframes width=$(ww) height=$(bb)"
-        tt += dt
     end
     fig
 end
