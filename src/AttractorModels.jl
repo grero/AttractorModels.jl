@@ -201,7 +201,7 @@ end
 
 function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, dt=1.0,
                                            bump_amp=1.5, max_width_scale=2, bump_time=20, bump_dur=2,well_min=0.0,basin_scale_min=1.0,
-                                           b0=5.5,w0=1.0, b20=0.01,b1=7.0, rebound=true, ntrials=1, freeze_before_bump=false,ifunc=(c)->c*randn(2),r0=2.0,
+                                           b0=5.5,w0=1.0, b20=0.01,b1=7.0, rebound=true, ntrials=1, freeze_before_bump=false,ifunc=(c)->c*randn(2),r0=2.0,fname="model_output_new.jld2",
                                            do_save=false,do_record=false,zmin_f=-3.2,zf0=-3.2, ϵf=1.0,ϵ0=2.5)
 
     xx =  -10:0.1:15.0
@@ -272,7 +272,7 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
                 # extract the curves
                 curvex = [x[1] for x in Xl[]]
                 curvey = [x[2] for x in Xl[]]
-                JLD2.save("model_output_new.jld2", Dict("curvex"=>curvex,
+                JLD2.save(fname, Dict("curvex"=>curvex,
                                                     "curvey"=>curvey,
                                                     "bump_amp"=>bump_amp,
                                                     "bunmp_dur"=>bump_dur,
