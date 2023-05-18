@@ -111,7 +111,7 @@ function get_combined_potential(Σ1::Matrix{Float64}, Σ2::Matrix{Float64}, Xi::
     #find a point on the ellipse where the value of 
     y2 = 0.0
     c = -2*log(zmin/A2)
-    init_func(q) = random_ellipse(Σ2,q*sqrt(c))
+    init_func(q,rng=Random.GLOBAL_RNG) = random_ellipse(rng, Σ2,q*sqrt(c))
     function f1(X, b=A2, width_scale=1.0,s=1.0,zm=zmin,ϵ=ϵ2)
         if ϵ != ϵ2
             # reshape the matrices
@@ -186,16 +186,20 @@ function get_trajectory(func::Function, gfunc::Function, X0::Vector{Float64},nfr
     X
 end
 
-function random_ellipse(a,b, c)
-    x = -c*b .+ 2*c*b*rand()
+random_ellipse(a::Real,b::Real, c::Real) = random_ellipse(Random.GLOBAL_RNG, a,b,c)
+
+function random_ellipse(rng::T, a::Real,b::Real, c::Real) where T <: AbstractRNG
+    x = -c*b .+ 2*c*b*rand(rng)
     ym = sqrt.(a*a*(c*c .- x.*x./b^2))
-    y = -ym .+ 2*ym.*rand()
+    y = -ym .+ 2*ym.*rand(rng)
     x,y
 end
 
-function random_ellipse(Σ, c)
+random_ellipse(Σ::Matrix{T}, c::T) where T <: Real = random_ellipse(Random.GLOBAL_RNG, Σ,c)
+
+function random_ellipse(rng::T2, Σ::Matrix{T}, c::T) where T <: Real where T2 <: AbstractRNG
     ee = eigen(Σ)
-    x,y = random_ellipse(1.0/sqrt(ee.values[1]),1.0/sqrt(ee.values[2]),c)
+    x,y = random_ellipse(rng, 1.0/sqrt(ee.values[1]),1.0/sqrt(ee.values[2]),c)
     ee.vectors*[x,y]
 end
 
