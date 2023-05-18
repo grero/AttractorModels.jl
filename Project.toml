@@ -1,7 +1,7 @@
 name = "AttractorModels"
 uuid = "c5b5f41d-6417-4974-a1bf-8957fdc17f70"
 authors = ["Roger Herikstad <roger.herikstad@gmail.com>"]
-version = "0.1.0"
+version = "0.2.0"
 
 [deps]
 CRC32c = "8bf52ea8-c179-5cab-976a-9e18b702a9bc"
