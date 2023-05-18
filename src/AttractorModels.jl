@@ -325,13 +325,13 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
                 #w[] = w0
             end
             _X0 = X0[]
-            if !freeze_before_bump || i >= bump_time+bump_dur
+            if !freeze_before_bump || i > bump_time
                 for _x0 in _X0
                     ΔX = gfunc(_x0, b[],w[],b2[],bs[],zf[],ϵ[])
                     _x0 .= _x0 + ΔX*dt + σn*randn(2)
                 end
-                X0[] = _X0
             end
+            X0[] = _X0
             yield()
             sleep(0.1)
             ww = round(w[],sigdigits=2)
