@@ -6,7 +6,7 @@ using CRC32c
 using ProgressMeter
 using LinearAlgebra
 using Makie
-using Makie: Point2f0, Point3f0
+using Makie: Point2f, Point3f
 
 function get_attractors(;w1=sqrt(5.0), w2=sqrt(7.0), wf=sqrt(3.5), A0=7.0, b=-4.0)
     Xi = [-5.0, -5.0] # start
