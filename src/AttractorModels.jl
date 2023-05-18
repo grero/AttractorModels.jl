@@ -6,7 +6,7 @@ using CRC32c
 using ProgressMeter
 using LinearAlgebra
 using Makie
-using Makie: Point2f0, Point3f0
+using Makie: Point2f, Point3f
 
 function get_attractors(;w1=sqrt(5.0), w2=sqrt(7.0), wf=sqrt(3.5), A0=7.0, b=-4.0)
     Xi = [-5.0, -5.0] # start
@@ -203,37 +203,45 @@ function random_ellipse(rng::T2, Σ::Matrix{T}, c::T) where T <: Real where T2 <
     ee.vectors*[x,y]
 end
 
-function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, dt=1.0,
-                                           bump_amp=1.5, max_width_scale=2, bump_time=20, bump_dur=2,well_min=0.0,basin_scale_min=1.0,
-                                           b0=5.5,w0=1.0, b20=0.01,b1=7.0, rebound=true, ntrials=1, freeze_before_bump=false,ifunc=(c)->c*randn(2),r0=2.0,fname="model_output_new.jld2",
-                                           do_save=false,do_record=false,zmin_f=-3.2,zf0=-3.2, ϵf=1.0,ϵ0=2.5)
-
-    xx =  -10:0.1:15.0
-    yy = -25:0.1:0.0 
-    rtimes = Observable(fill(NaN, ntrials))
+function get_trajectories(func::Function, gfunc::Function, ifunc::Function;kvs...)
     bs = Observable(1.0)
-    b = Observable(-b0)
-    b2 = Observable(-b20)
-    w = Observable(w0)
-    zf = Observable(-zf0)
-    ϵ = Observable(ϵ0)
-    zmin = -1.2*well_min
-    tt = 0.0
-    X0 = Observable([[-5.0, -5.0] + ifunc(r0) for i in 1:ntrials])
+    b = Observable(-get(kvs, :b0, 5.5))
+    b2 = Observable(-get(kvs, :b20, 0.01))
+    w = Observable(get(kvs, :w0, 1.0))
+    zf = Observable(-get(kvs, :zf0, -3.2))
+    ϵ = Observable(get(kvs, :ϵ0, 2.5))
+    r0 = get(kvs, :r0, 2.0) 
+    ntrials = get(kvs, :ntrials,1 )
+    #starting point
+    rng = get(kvs, :rng, Random.GLOBAL_RNG)
+    X0 = Observable([[-5.0, -5.0] + ifunc(r0, rng) for i in 1:ntrials])
+    zmin = -1.2*get(kvs, :well_min, 0.0)
+    Xl = Observable(cat([[Point3f(_X0[1], _X0[2], zmin),Point3f(NaN,NaN,NaN)] for _X0 in X0[]]...,dims=1))
+    manifold_params=(bs=bs,b=b,b2=b2,w=w,zf=zf,ϵ=ϵ,X0=X0)
+    get_trajectories!(manifold_params, Xl, func, gfunc, ifunc;kvs...)
+end
 
-    zz = lift(b,w,b2,bs,zf,ϵ) do _b, _w,_b2,_bs,_zf, _ϵ
-        func.([[x,y] for x in xx, y in yy],_b, _w,_b2,_bs,_zf,_ϵ)
-    end
-    X = lift(b,X0,w,b2,bs,zf,ϵ) do _b,_X0,_w, _b2, _bs, _zf,_ϵ
-        [Makie.Point3f0(_X[1], _X[2], func(_X,_b,_w,_b2,_bs,_zf,_ϵ)) for _X in _X0]
-    end
-    Xl = Observable(cat([[Point3f0(_X0[1], _X0[2], zmin),Point3f0(NaN,NaN,NaN)] for _X0 in X0[]]...,dims=1))
+function get_trajectories!(manifold_params, Xl::Observable{Vector{Point3f}}, func::Function, gfunc::Function, ifunc::Function;nframes=100,σn=0.0, dt=1.0,
+                                           bump_amp=1.5, max_width_scale=2, bump_time=20, bump_dur=2,well_min=0.0,basin_scale_min=1.0,
+                                           b0=5.5,w0=1.0, b20=0.01,b1=7.0, rebound=true, ntrials=1, freeze_before_bump=false,r0=2.0,fname="model_output_new.jld2",
+                                           do_save=false,do_record=false,zmin_f=-3.2,zf0=-3.2, ϵf=1.0,ϵ0=2.5, rng=Random.GLOBAL_RNG, io::Union{VideoStream, Nothing}=nothing)
+
+    rtimes = Observable(fill(NaN, ntrials))
+    bs = manifold_params.bs
+    b = manifold_params.b
+    b2 = manifold_params.b2
+    w = manifold_params.w
+    zf = manifold_params.zf
+    ϵ = manifold_params.ϵ
+    X0 = manifold_params.X0
+
+    zmin = -1.2*well_min
     pidx = [2:2:2*ntrials;]
     on(X0) do _X0
         _Xl = Xl[]
         _rtimes = rtimes[]
         for (ii,_x0) in enumerate(_X0)
-            insert!(_Xl,  pidx[ii], Makie.Point3f0(_x0[1], _x0[2], zmin))
+            insert!(_Xl,  pidx[ii], Makie.Point3f(_x0[1], _x0[2], zmin))
             if sum(abs2, _x0 - [7.0,-13.0]) <= 0.01*35.0
                 if isnan(_rtimes[ii] )
                     _rtimes[ii] = tt
@@ -244,16 +252,99 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
         rtimes[] = _rtimes
         Xl[] = _Xl
     end
+    tt = 0.0
+    for i in 1:nframes
+        if bump_time <= i < bump_time + bump_dur
+            #TODO Also increase width here
+            j = i - bump_time+1
+            if rebound
+                half_time = bump_dur/2
+            else
+                half_time = bump_dur
+            end
+            if j <= half_time 
+                b[] = -(b0 - (b0 - bump_amp)*j/half_time)
+                b2[] = -(b20 - (b20 - well_min)*j/half_time)
+                w[] = w0 - (w0 - max_width_scale)*j/half_time
+                bs[] = max(1.0 - (1.0 - basin_scale_min)*j/half_time, 0.0)
+                zf[] = -(zf0 - (zf0 - zmin_f)*j/half_time)
+                ϵ[] = ϵ0 - (ϵ0 - ϵf)*j/half_time
+
+            else
+                b[] = -(bump_amp - (bump_amp-b0)*(j-half_time)/bump_dur)
+                b2[] = -(well_min - (well_min-b20)*(j-half_time)/bump_dur)
+                # can this become negative
+                w[] = max_width_scale - (max_width_scale-w0)*(j-half_time)/bump_dur
+                bs[] = max(basin_scale_min - (basin_scale_min-1.0)*(j-half_time)/bump_dur, 0.0)
+                zf[] = -(zmin_f - (zmin_f-zf0)*(j-half_time)/bump_dur)
+                ϵ[] = ϵf - (ϵf-ϵ0)*(j-half_time)/bump_dur
+            end
+        else
+            #b[] = -b0
+            #w[] = w0
+        end
+        _X0 = X0[]
+        if !freeze_before_bump || i > bump_time
+            for _x0 in _X0
+                ΔX = gfunc(_x0, b[],w[],b2[],bs[],zf[],ϵ[])
+                _x0 .= _x0 + ΔX*dt + σn*randn(rng, 2)
+            end
+        end
+        X0[] = _X0
+        # if we are given a VideoStream, record a frame and yield
+        if io !== nothing
+            recordframe!(io)
+            yield()
+        end
+        tt += dt
+    end
+    Xl
+end
+
+function animate_manifold(func::Function, gfunc::Function,ifunc;do_save=true, do_record=false, animation_filename="my_cool_movie.mp4", kvs...)
+
+    xx =  -10:0.1:15.0
+    yy = -25:0.1:0.0 
+    bs = Observable(1.0)
+    b = Observable(-get(kvs, :b0, 5.5))
+    b2 = Observable(-get(kvs, :b20, 0.01))
+    w = Observable(get(kvs, :w0, 1.0))
+    zf = Observable(-get(kvs, :zf0, -3.2))
+    ϵ = Observable(get(kvs, :ϵ0, 2.5))
+    r0 = get(kvs, :r0, 2.0) 
+    ntrials = get(kvs, :ntrials,1 )
+    rtimes = Observable(fill(NaN, ntrials))
+    X0 = Observable([[-5.0, -5.0] + ifunc(r0) for i in 1:ntrials])
+    manifold_params=(bs=bs,b=b,b2=b2,w=w,zf=zf,ϵ=ϵ,X0=X0)
+    zmin = -1.2*get(kvs, :well_min, 0.0)
+
+    tt = 0.0
+
+    frameidx = Observable(1)
+    zz = lift(b,w,b2,bs,zf,ϵ) do _b, _w,_b2,_bs,_zf, _ϵ
+        func.([[x,y] for x in xx, y in yy],_b, _w,_b2,_bs,_zf,_ϵ)
+    end
+    X = lift(b,X0,w,b2,bs,zf,ϵ) do _b,_X0,_w, _b2, _bs, _zf,_ϵ
+        frameidx[] = frameidx[] + 1
+        [Makie.Point3f(_X[1], _X[2], func(_X,_b,_w,_b2,_bs,_zf,_ϵ)) for _X in _X0]
+    end
+
+    Xl = Observable(cat([[Point3f(_X0[1], _X0[2], zmin),Point3f(NaN,NaN,NaN)] for _X0 in X0[]]...,dims=1))
 
     fig = Figure(resolution=(1024,768))
     ax = Axis3(fig[1,1], azimuth=4.424342889186364, elevation=0.5030970309174743)
     zlims!(ax, zmin, maximum(zz[]))
+    nframes = get(kvs, :nframes, 100)
+
     ax.title = "Frame 1/$nframes"
+    on(frameidx) do fidx
+        ax.title = "Frame $(fidx)/$nframes"
+    end
     surface!(ax, xx, yy, zz)
     meshscatter!(ax, X,markersize=0.25)
     lines!(ax, Xl,color="black")
-    lpoints = decompose(Point3f0, Circle(Point2f0(7.0,-13.0), 0.1*sqrt(60/2)))
-    lpoints .+= Point3f0(0.0, 0.0, zmin)
+    lpoints = decompose(Point3f, Circle(Point2f0(7.0,-13.0), 0.1*sqrt(60/2)))
+    lpoints .+= Point3f(0.0, 0.0, zmin)
     lines!(ax, lpoints)
     ax2 = Axis(fig[1,2])
     colsize!(fig.layout,1,Relative(0.7))
@@ -265,79 +356,34 @@ function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, d
     ax2.xlabel = "Trial"
     ax2.ylabel = "Reaction time"
     xlims!(ax2, 0.0,ntrials+1)
+    dt = get(kvs, :dt, 1.0)
     ylims!(ax2, 0.0, nframes*dt)
-    rfunc1(f,fig,vidx) = record(f,fig,"a_cool_movie.mp4",vidx)
-    function rfunc2(f,fig,vidx)
-        @async begin
-            for i in vidx
-                f(i)
-            end
-            if do_save
-                # extract the curves
-                curvex = [x[1] for x in Xl[]]
-                curvey = [x[2] for x in Xl[]]
-                JLD2.save(fname, Dict("curvex"=>curvex,
-                                                    "curvey"=>curvey,
-                                                    "bump_amp"=>bump_amp,
-                                                    "bunmp_dur"=>bump_dur,
-                                                    "σn"=>σn,
-                                                    "bump_time"=>bump_time,
-                                                    "ntrials"=>ntrials,
-                                                    "nframes"=>nframes,
-                                                    "rtimes"=>rtimes[]))
-
-            end
-        end
-    end
     if do_record
-        rfunc = rfunc1
+        io = VideoStream(fig)
     else
-        rfunc = rfunc2
+        io = nothing
     end
-    rfunc(fig,1:nframes) do i
-            if bump_time <= i < bump_time + bump_dur
-                #TODO Also increase width here
-                j = i - bump_time+1
-                if rebound
-                    half_time = bump_dur/2
-                else
-                    half_time = bump_dur
-                end
-                if j <= half_time 
-                    b[] = -(b0 - (b0 - bump_amp)*j/half_time)
-                    b2[] = -(b20 - (b20 - well_min)*j/half_time)
-                    w[] = w0 - (w0 - max_width_scale)*j/half_time
-                    bs[] = max(1.0 - (1.0 - basin_scale_min)*j/half_time, 0.0)
-                    zf[] = -(zf0 - (zf0 - zmin_f)*j/half_time)
-                    ϵ[] = ϵ0 - (ϵ0 - ϵf)*j/half_time
+    @async begin
+        get_trajectories!(manifold_params, Xl, func, gfunc, ifunc;io=io, kvs...)
+        if do_record
+            @show "Saving..."
+            save(animation_filename, io)
+        end
+        if do_save
+            # extract the curves
+            curvex = [x[1] for x in Xl[]]
+            curvey = [x[2] for x in Xl[]]
+            JLD2.save(fname, Dict("curvex"=>curvex,
+                                                "curvey"=>curvey,
+                                                "bump_amp"=>get(kvs,:bump_amp,1.5),
+                                                "bunmp_dur"=>get(kvs, :bump_dur, 2),
+                                                "σn"=>get(kvs, :σn, 0.0),
+                                                "bump_time"=>get(kvs, :bump_time, 20),
+                                                "ntrials"=>ntrials,
+                                                "nframes"=>nframes,
+                                                "rtimes"=>rtimes[]))
 
-                else
-                    b[] = -(bump_amp - (bump_amp-b0)*(j-half_time)/bump_dur)
-                    b2[] = -(well_min - (well_min-b20)*(j-half_time)/bump_dur)
-                    # can this become negative
-                    w[] = max_width_scale - (max_width_scale-w0)*(j-half_time)/bump_dur
-                    bs[] = max(basin_scale_min - (basin_scale_min-1.0)*(j-half_time)/bump_dur, 0.0)
-                    zf[] = -(zmin_f - (zmin_f-zf0)*(j-half_time)/bump_dur)
-                    ϵ[] = ϵf - (ϵf-ϵ0)*(j-half_time)/bump_dur
-                end
-            else
-                #b[] = -b0
-                #w[] = w0
-            end
-            _X0 = X0[]
-            if !freeze_before_bump || i > bump_time
-                for _x0 in _X0
-                    ΔX = gfunc(_x0, b[],w[],b2[],bs[],zf[],ϵ[])
-                    _x0 .= _x0 + ΔX*dt + σn*randn(2)
-                end
-            end
-            X0[] = _X0
-            yield()
-            sleep(0.1)
-            ww = round(w[],sigdigits=2)
-            bb = round(b[], sigdigits=2)
-            ax.title = "Frame $i/$nframes width=$(ww) height=$(bb)"
-            tt += dt
+        end
     end
     fig
 end
