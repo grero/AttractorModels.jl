@@ -203,6 +203,97 @@ function random_ellipse(rng::T2, Σ::Matrix{T}, c::T) where T <: Real where T2 <
     ee.vectors*[x,y]
 end
 
+function get_trajectories(func::Function, gfunc::Function, ifunc::Function;kvs...)
+    bs = Observable(1.0)
+    b = Observable(-get(kvs, :b0, 5.5))
+    b2 = Observable(-get(kvs, :b20, 0.01))
+    w = Observable(get(kvs, :w0, 1.0))
+    zf = Observable(-get(kvs, :zf0, -3.2))
+    ϵ = Observable(get(kvs, :ϵ0, 2.5))
+    r0 = get(kvs, :r0, 2.0) 
+    ntrials = get(kvs, :ntrials,1 )
+    #starting point
+    X0 = Observable([[-5.0, -5.0] + ifunc(r0) for i in 1:ntrials])
+    manifold_params=(bs=bs,b=b,b2=b2,w=w,zf=zf,ϵ=ϵ,X0=X0)
+    get_trajectories!(manifold_params, func, gfunc, ifunc;kvs...)
+end
+
+function get_trajectories!(manifold_params, func::Function, gfunc::Function, ifunc::Function;nframes=100,σn=0.0, dt=1.0,
+                                           bump_amp=1.5, max_width_scale=2, bump_time=20, bump_dur=2,well_min=0.0,basin_scale_min=1.0,
+                                           b0=5.5,w0=1.0, b20=0.01,b1=7.0, rebound=true, ntrials=1, freeze_before_bump=false,r0=2.0,fname="model_output_new.jld2",
+                                           do_save=false,do_record=false,zmin_f=-3.2,zf0=-3.2, ϵf=1.0,ϵ0=2.5, rng=Random.GLOBAL_RNG)
+
+    rtimes = Observable(fill(NaN, ntrials))
+    bs = manifold_params.bs
+    b = manifold_params.b
+    b2 = manifold_params.b2
+    w = manifold_params.w
+    zf = manifold_params.zf
+    ϵ = manifold_params.ϵ
+    X0 = manifold_params.X0
+
+    zmin = -1.2*well_min
+    Xl = Observable(cat([[Point3f0(_X0[1], _X0[2], zmin),Point3f0(NaN,NaN,NaN)] for _X0 in X0[]]...,dims=1))
+    pidx = [2:2:2*ntrials;]
+    on(X0) do _X0
+        _Xl = Xl[]
+        _rtimes = rtimes[]
+        for (ii,_x0) in enumerate(_X0)
+            insert!(_Xl,  pidx[ii], Makie.Point3f0(_x0[1], _x0[2], zmin))
+            if sum(abs2, _x0 - [7.0,-13.0]) <= 0.01*35.0
+                if isnan(_rtimes[ii] )
+                    _rtimes[ii] = tt
+                end
+            end
+            pidx[ii:end] .+= 1
+        end
+        rtimes[] = _rtimes
+        Xl[] = _Xl
+    end
+    tt = 0.0
+    for i in 1:nframes
+        if bump_time <= i < bump_time + bump_dur
+            #TODO Also increase width here
+            j = i - bump_time+1
+            if rebound
+                half_time = bump_dur/2
+            else
+                half_time = bump_dur
+            end
+            if j <= half_time 
+                b[] = -(b0 - (b0 - bump_amp)*j/half_time)
+                b2[] = -(b20 - (b20 - well_min)*j/half_time)
+                w[] = w0 - (w0 - max_width_scale)*j/half_time
+                bs[] = max(1.0 - (1.0 - basin_scale_min)*j/half_time, 0.0)
+                zf[] = -(zf0 - (zf0 - zmin_f)*j/half_time)
+                ϵ[] = ϵ0 - (ϵ0 - ϵf)*j/half_time
+
+            else
+                b[] = -(bump_amp - (bump_amp-b0)*(j-half_time)/bump_dur)
+                b2[] = -(well_min - (well_min-b20)*(j-half_time)/bump_dur)
+                # can this become negative
+                w[] = max_width_scale - (max_width_scale-w0)*(j-half_time)/bump_dur
+                bs[] = max(basin_scale_min - (basin_scale_min-1.0)*(j-half_time)/bump_dur, 0.0)
+                zf[] = -(zmin_f - (zmin_f-zf0)*(j-half_time)/bump_dur)
+                ϵ[] = ϵf - (ϵf-ϵ0)*(j-half_time)/bump_dur
+            end
+        else
+            #b[] = -b0
+            #w[] = w0
+        end
+        _X0 = X0[]
+        if !freeze_before_bump || i > bump_time
+            for _x0 in _X0
+                ΔX = gfunc(_x0, b[],w[],b2[],bs[],zf[],ϵ[])
+                _x0 .= _x0 + ΔX*dt + σn*randn(rng, 2)
+            end
+        end
+        X0[] = _X0
+        tt += dt
+    end
+    Xl
+end
+
 function animate_manifold(func::Function, gfunc::Function;nframes=100,σn=0.0, dt=1.0,
                                            bump_amp=1.5, max_width_scale=2, bump_time=20, bump_dur=2,well_min=0.0,basin_scale_min=1.0,
                                            b0=5.5,w0=1.0, b20=0.01,b1=7.0, rebound=true, ntrials=1, freeze_before_bump=false,ifunc=(c)->c*randn(2),r0=2.0,fname="model_output_new.jld2",
