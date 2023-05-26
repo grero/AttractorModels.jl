@@ -8,6 +8,18 @@ using LinearAlgebra
 using Makie
 using Makie: Point2f, Point3f
 
+"""
+Type encapsulating a figure being animated, along with the task that animates it
+This is basically so that we can easily display the output while it's being animated.
+"""
+struct WaitFig
+    fig
+    aa::Task
+end
+
+Base.display(x::WaitFig) = Base.display(x.fig)
+Base.show(io, x::WaitFig) = Base.show(io, x.fig)
+
 function get_attractors(;w1=sqrt(5.0), w2=sqrt(7.0), wf=sqrt(3.5), A0=7.0, b=-4.0)
     Xi = [-5.0, -5.0] # start
     Xe = [7.0, -13.0] # end
@@ -31,7 +43,7 @@ function get_attractors(;w1=sqrt(5.0), w2=sqrt(7.0), wf=sqrt(3.5), A0=7.0, b=-4.
     Σb[2,2] = 1.5*wf²/w1²
     Σb = R*Σb*R'
     fb,gb = get_potential(Σb, Xi, b)
-    # the end state 
+    # the end state
     w2²= w2*w2
     Σe = [w2² 0.0; 0.0 w2²]
     f2,g2 = get_potential(Σe, Xe, -A0)
@@ -63,7 +75,7 @@ function get_attractors2(;w1=sqrt(5.0), w2=sqrt(7.0), wf=sqrt(3.5), A0=7.0, b=-4
     Σb[2,2] = wf²/ϵ2^2
     Σb = R*Σb*R'
     f1,g1,init_func = get_combined_potential(Σ, Σb, Xi, A0, b, zmin)
-    # the end state 
+    # the end state
     w2²= w2*w2
     Σe = [w2² 0.0; 0.0 w2²]
     f2,g2 = get_potential(Σe, Xe, -A2)
@@ -73,8 +85,8 @@ end
 function flat_bottom(Λ::Vector{Float64}, b::Float64, b0=0.8*b)
     Σ = diagm(Λ[1:2])
     Σi = inv(Σ)
-    c = -2*log(b0/b) 
-    f1(X) = (d=X; b*exp(-d'*Σi*d/2)) 
+    c = -2*log(b0/b)
+    f1(X) = (d=X; b*exp(-d'*Σi*d/2))
     f2(X) = (d=X;d2=d'*Σi*d; d2 < c ? -sqrt(Λ[3]*(c - d[1]^2/Λ[1] - d[2]^2/Λ[2])) : 0.0)
     f3(X) = f1(X) + f2(X)
 end
@@ -86,7 +98,7 @@ end
 
 
 function get_potential(Σ::Matrix{Float64}, Xi::Vector{Float64},A0::Float64)
-    Σi = inv(Σ) 
+    Σi = inv(Σ)
     f1 = (X,b=A0)->(d = Xi-X; b*exp(-d'*Σi*d/2.0))
     # gradient at X
     g1 = (X,b=A0)->(d=Xi-X; -f1(X,b)/2*(Σi + Σi')*d)
@@ -106,9 +118,9 @@ function get_combined_potential(Σ1::Matrix{Float64}, Σ2::Matrix{Float64}, Xi::
     ee = eigen(Σ2i)
     ϵ2 = sqrt(ee.values[2]/ee.values[1])
     ee1 = eigen(Σ1i)
-    Λ = ee.values 
+    Λ = ee.values
     P = ee.vectors
-    #find a point on the ellipse where the value of 
+    #find a point on the ellipse where the value of
     y2 = 0.0
     c = -2*log(zmin/A2)
     init_func(q,rng=Random.GLOBAL_RNG) = random_ellipse(rng, Σ2,q*sqrt(c))
@@ -123,9 +135,9 @@ function get_combined_potential(Σ1::Matrix{Float64}, Σ2::Matrix{Float64}, Xi::
         dp1 = d'*Σ1i*d
         z1 = A1*exp(-dp1/2.0)
         z2 = b*exp(-d'*_Σ2i*d/2.0)
-        #@info "c" zmin b 
+        #@info "c" zmin b
         if (b < zm) && (zm < 0.0) && (abs(b)/abs(A1) > 0.01)
-            # find dᵗΣ⁻¹d corresponding to the value zmin; we won't allow the potential to dip below zmin here 
+            # find dᵗΣ⁻¹d corresponding to the value zmin; we won't allow the potential to dip below zmin here
             c = -2*log(zm/b)
             # we just need a single point on the ellipse, so set y₁=0 and solve for y₂.
             y1 = sqrt(width_scale*c/ee.values[1])
@@ -133,7 +145,7 @@ function get_combined_potential(Σ1::Matrix{Float64}, Σ2::Matrix{Float64}, Xi::
             Xp = ee.vectors'*[y1,y2]
             dp = Xp
             dp2 = dp'Σ1i*dp
-            z1min = A1*exp(-dp2/2.0) 
+            z1min = A1*exp(-dp2/2.0)
             if dp1 < dp2
                 z1 = z1min
                 z2 = zm
@@ -210,23 +222,24 @@ function get_trajectories(func::Function, gfunc::Function, ifunc::Function;kvs..
     w = Observable(get(kvs, :w0, 1.0))
     zf = Observable(-get(kvs, :zf0, -3.2))
     ϵ = Observable(get(kvs, :ϵ0, 2.5))
-    r0 = get(kvs, :r0, 2.0) 
     ntrials = get(kvs, :ntrials,1 )
+    rtimes = Observable(fill(NaN, ntrials))
+    r0 = get(kvs, :r0, 2.0)
     #starting point
     rng = get(kvs, :rng, Random.GLOBAL_RNG)
     X0 = Observable([[-5.0, -5.0] + ifunc(r0, rng) for i in 1:ntrials])
     zmin = -1.2*get(kvs, :well_min, 0.0)
     Xl = Observable(cat([[Point3f(_X0[1], _X0[2], zmin),Point3f(NaN,NaN,NaN)] for _X0 in X0[]]...,dims=1))
-    manifold_params=(bs=bs,b=b,b2=b2,w=w,zf=zf,ϵ=ϵ,X0=X0)
+    manifold_params=(bs=bs,b=b,b2=b2,w=w,zf=zf,ϵ=ϵ,X0=X0, rtimes=rtimes)
     get_trajectories!(manifold_params, Xl, func, gfunc, ifunc;kvs...)
 end
 
 function get_trajectories!(manifold_params, Xl::Observable{Vector{Point3f}}, func::Function, gfunc::Function, ifunc::Function;nframes=100,σn=0.0, dt=1.0,
                                            bump_amp=1.5, max_width_scale=2, bump_time=20, bump_dur=2,well_min=0.0,basin_scale_min=1.0,
                                            b0=5.5,w0=1.0, b20=0.01,b1=7.0, rebound=true, ntrials=1, freeze_before_bump=false,r0=2.0,fname="model_output_new.jld2",
-                                           do_save=false,do_record=false,zmin_f=-3.2,zf0=-3.2, ϵf=1.0,ϵ0=2.5, rng=Random.GLOBAL_RNG, io::Union{VideoStream, Nothing}=nothing)
+                                           do_save=false,do_record=false,zmin_f=-3.2,zf0=-3.2, ϵf=1.0,ϵ0=2.5, rng=Random.GLOBAL_RNG,
+                                           io::Union{VideoStream, Nothing}=nothing,fps=Inf)
 
-    rtimes = Observable(fill(NaN, ntrials))
     bs = manifold_params.bs
     b = manifold_params.b
     b2 = manifold_params.b2
@@ -234,7 +247,7 @@ function get_trajectories!(manifold_params, Xl::Observable{Vector{Point3f}}, fun
     zf = manifold_params.zf
     ϵ = manifold_params.ϵ
     X0 = manifold_params.X0
-
+    rtimes = manifold_params.rtimes
     zmin = -1.2*well_min
     pidx = [2:2:2*ntrials;]
     on(X0) do _X0
@@ -262,7 +275,7 @@ function get_trajectories!(manifold_params, Xl::Observable{Vector{Point3f}}, fun
             else
                 half_time = bump_dur
             end
-            if j <= half_time 
+            if j <= half_time
                 b[] = -(b0 - (b0 - bump_amp)*j/half_time)
                 b2[] = -(b20 - (b20 - well_min)*j/half_time)
                 w[] = w0 - (w0 - max_width_scale)*j/half_time
@@ -294,7 +307,10 @@ function get_trajectories!(manifold_params, Xl::Observable{Vector{Point3f}}, fun
         # if we are given a VideoStream, record a frame and yield
         if io !== nothing
             recordframe!(io)
+        end
+        if isfinite(fps)
             yield()
+            sleep(1/fps)
         end
         tt += dt
     end
@@ -304,18 +320,18 @@ end
 function animate_manifold(func::Function, gfunc::Function,ifunc;do_save=true, do_record=false, animation_filename="my_cool_movie.mp4", kvs...)
 
     xx =  -10:0.1:15.0
-    yy = -25:0.1:0.0 
+    yy = -25:0.1:0.0
     bs = Observable(1.0)
     b = Observable(-get(kvs, :b0, 5.5))
     b2 = Observable(-get(kvs, :b20, 0.01))
     w = Observable(get(kvs, :w0, 1.0))
     zf = Observable(-get(kvs, :zf0, -3.2))
     ϵ = Observable(get(kvs, :ϵ0, 2.5))
-    r0 = get(kvs, :r0, 2.0) 
+    r0 = get(kvs, :r0, 2.0)
     ntrials = get(kvs, :ntrials,1 )
     rtimes = Observable(fill(NaN, ntrials))
     X0 = Observable([[-5.0, -5.0] + ifunc(r0) for i in 1:ntrials])
-    manifold_params=(bs=bs,b=b,b2=b2,w=w,zf=zf,ϵ=ϵ,X0=X0)
+    manifold_params=(bs=bs,b=b,b2=b2,w=w,zf=zf,ϵ=ϵ,X0=X0, rtimes=rtimes)
     zmin = -1.2*get(kvs, :well_min, 0.0)
 
     tt = 0.0
@@ -343,7 +359,7 @@ function animate_manifold(func::Function, gfunc::Function,ifunc;do_save=true, do
     surface!(ax, xx, yy, zz)
     meshscatter!(ax, X,markersize=0.25)
     lines!(ax, Xl,color="black")
-    lpoints = decompose(Point3f, Circle(Point2f0(7.0,-13.0), 0.1*sqrt(60/2)))
+    lpoints = decompose(Point3f, Circle(Point2f(7.0,-13.0), 0.1*sqrt(60/2)))
     lpoints .+= Point3f(0.0, 0.0, zmin)
     lines!(ax, lpoints)
     ax2 = Axis(fig[1,2])
@@ -363,8 +379,8 @@ function animate_manifold(func::Function, gfunc::Function,ifunc;do_save=true, do
     else
         io = nothing
     end
-    @async begin
-        get_trajectories!(manifold_params, Xl, func, gfunc, ifunc;io=io, kvs...)
+    aa = Threads.@spawn begin
+        get_trajectories!(manifold_params, Xl, func, gfunc, ifunc;io=io, do_record=do_record, kvs...)
         if do_record
             @show "Saving..."
             save(animation_filename, io)
@@ -373,6 +389,7 @@ function animate_manifold(func::Function, gfunc::Function,ifunc;do_save=true, do
             # extract the curves
             curvex = [x[1] for x in Xl[]]
             curvey = [x[2] for x in Xl[]]
+            fname = get(kvs,:fname, "my_cool_model.jld2")
             JLD2.save(fname, Dict("curvex"=>curvex,
                                                 "curvey"=>curvey,
                                                 "bump_amp"=>get(kvs,:bump_amp,1.5),
@@ -385,7 +402,11 @@ function animate_manifold(func::Function, gfunc::Function,ifunc;do_save=true, do
 
         end
     end
-    fig
+    # if this is not an interative run, wait for the task
+    if do_record || !isfinite(get(kvs, :fps, Inf))
+        wait(aa)
+    end
+    WaitFig(fig, aa)
 end
 
 function run_model(;redo=false, do_save=true,σ²0=1.0,τ=3.0,σ²n=0.0, nd=78,n_init_points=1,
@@ -449,7 +470,7 @@ function run_model(;redo=false, do_save=true,σ²0=1.0,τ=3.0,σ²n=0.0, nd=78,n
         max_rt_idx = argmax(rt)
         min_rt_idx = argmin(rt)
         np_min = 10
-        # 
+        #
         Δt = round(Int64, (eeidx[min_rt_idx]-1)/np_min)
         Δt = 1
 
@@ -458,7 +479,7 @@ function run_model(;redo=false, do_save=true,σ²0=1.0,τ=3.0,σ²n=0.0, nd=78,n
         W = qq[:,1:2]
         Y = fill(0.0, size(curvesp[1],1),nd, ntrials)
         Ys = fill!(similar(Y), NaN)
-        Σ = diagm(fill(sqrt(σ²0/nd), nd)) 
+        Σ = diagm(fill(sqrt(σ²0/nd), nd))
         Ym = fill(0.0, ntrials, nd)
         Ye = fill!(similar(Ym), 0.0)
         Y0 = fill!(similar(Ym), 0.0)
@@ -467,7 +488,7 @@ function run_model(;redo=false, do_save=true,σ²0=1.0,τ=3.0,σ²n=0.0, nd=78,n
         for i in 1:length(σ²)
             _Σ = cov(cat([curve[i,:] for curve in curvesp]...,dims=2),dims=2)
             u,s,v = svd(_Σ)
-            σ²[i] = sum(s) 
+            σ²[i] = sum(s)
         end
         nruns = 50
         pltr = fill(0.0, ntrials, nruns)
@@ -489,14 +510,14 @@ function run_model(;redo=false, do_save=true,σ²0=1.0,τ=3.0,σ²n=0.0, nd=78,n
         #Q = [1.0/sqrt(2π*τ^2)*exp(-(t1-t2)^2/(2*τ^2)) for t1 in 1:size(Y,1), t2 in 1:size(Y,1)]
         Q = correlated_noise_process(1.0:size(Y,1), τ,1, (σ²0-σ²n)/nd, σ²n/nd)
         @info "Q" size(Q)
-        A,U = cholesky(Q) 
+        A,U = cholesky(Q)
         @info "A" size(A)
         @showprogress for r in 1:nruns
             # maybe we need to do some smoothing here?
             for i in 1:ntrials
                 curve = curvesp[i]
                 for j in 1:size(Y,1)
-                    Y[j,:,i] .= W*curve[j,:] 
+                    Y[j,:,i] .= W*curve[j,:]
                 end
                 # add correlated noise
                 Y[:,:,i] .+= A*randn(size(Q,1),nd)
@@ -522,7 +543,7 @@ function run_model(;redo=false, do_save=true,σ²0=1.0,τ=3.0,σ²n=0.0, nd=78,n
             β,r²0[r], pv0[r],rss = MovementDecoders.llsq_stats(Z0, rt)
             r²0[r] = adjusted_r²(r²0[r], ntrials, length(β))
             @debug "Regress initial" r²0[r] β
-            # mid-point 
+            # mid-point
             #Xm = permutedims(cat([curve[1+div(_eeidx,2),:] for (curve,_eeidx) in zip(curvesp,eeidx)]...,dims=2), [2,1])
             #midpoints = [CartesianIndex(1+div(_eeidx[i],2),i) for i in 1:length(_eeidx)]
             fa = MultivariateStats.fit(MultivariateStats.FactorAnalysis, permutedims(Ym,[2,1]);maxoutdim=1, method=:em)
@@ -558,14 +579,14 @@ function run_model(;redo=false, do_save=true,σ²0=1.0,τ=3.0,σ²n=0.0, nd=78,n
                 _Σ = cov(Y[i,:,:],dims=2)
                 u,s,v = svd(_Σ)
                 σ²f[i,r] = sum(s)
-                β, r²[i,r], _, _ = MovementDecoders.llsq_stats(permutedims(Y[i,:,:],[2,1]),rt) 
+                β, r²[i,r], _, _ = MovementDecoders.llsq_stats(permutedims(Y[i,:,:],[2,1]),rt)
                 r²[i,r] = adjusted_r²(r²[i,r], ntrials, length(β))
                 β, r²s[i,r], _, _ = MovementDecoders.llsq_stats(permutedims(Y[i,:,:],[2,1]), rts)
                 r²s[i,r] = adjusted_r²(r²s[i,r], ntrials, length(β))
             end
         end
         results = (r²e=r²e, r²0=r²0, pv0=pv0, r²pl=r²pl, r²hr=r²hr, r²m=r²m, r²=r², r²s=r²s,
-                   rt=rt, pltr=pltr, σ²f=σ²f, curves=curvesp,σ²0=σ²0, σ²=σ²,Y=Y, 
+                   rt=rt, pltr=pltr, σ²f=σ²f, curves=curvesp,σ²0=σ²0, σ²=σ²,Y=Y,
                    path_length=path_length, Ys=Ys, plf=plf, r²plf=r²plf, r²cv=r²cv)
         @info "r²plf" r²plf
         if do_save
@@ -595,13 +616,13 @@ function subsample_trajectory(Y::Matrix{Float64}, Δ::Float64)
             k += 1
         end
         j += 1
-        Ys[j,:] = Y[k,:] 
+        Ys[j,:] = Y[k,:]
         ks[j] = k
         if k == size(Y,1)
             break
-        end 
+        end
     end
-    Ys,ks 
+    Ys,ks
 end
 
 correlated_noise_process(t::AbstractVector{Float64}, τ::Float64,p::Int64,σ²f=1.0, σ²n=0.0) = correlated_noise_process(t, fill(τ,p),σ²f, σ²n)
