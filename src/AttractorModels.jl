@@ -6,7 +6,10 @@ using CRC32c
 using ProgressMeter
 using LinearAlgebra
 using Makie
-using Makie: Point2f, Point3f
+using Makie: Point2, Point3
+using StatsBase
+using Flux
+const ForwardDiff = Flux.Zygote.ForwardDiff
 
 """
 Type encapsulating a figure being animated, along with the task that animates it
@@ -15,6 +18,120 @@ This is basically so that we can easily display the output while it's being anim
 struct WaitFig
     fig
     aa::Task
+end
+
+struct BumpParams{T<:Real}
+    bump_amp::Vector{T}
+    bump_time::Vector{T}
+    bump_dur::Vector{T}
+    zmin_f::Vector{T}
+end
+
+BumpParams(a::Float64, b::Float64, c::Float64, d::Float64)  = BumpParams([a],[b],[c],[d])
+
+function BumpParams(;kvs...)
+    dkvs = Dict(kvs)
+    args = Any[]
+    push!(args, get(kvs, :bump_amp, 0.01))
+    push!(args, get(dkvs, :bump_time, 20.0))
+    push!(args, get(dkvs, :bump_dur, 5.0))
+    push!(args, get(dkvs, :zmin_f, 0.0))
+    BumpParams(args...)
+end
+struct PathGrad{T1<:Real, T2 <: Integer}
+    A::Vector{T1} # amplitudes
+    zmin::Vector{T1} # bottom
+    W::Vector{T1} # widths
+    φ::Vector{T1} # orientation
+    ε::Vector{T1} # eccentricity
+    X0::Vector{T1} # well positions
+    # fixed parameter
+    d::T2 # dimensionality
+    # derived parameters
+    Σ0::Matrix{T1}
+    Σ1::Matrix{T1}
+    Σ2::Matrix{T1}
+    v::Vector{T1}
+end
+
+function destructure(params::Vector{T}) where T <: Real
+    d = 2
+    _X0 = convert(Vector{T}, [-5.0, -5.0, 7.0, -13.0])
+    pg = PathGrad(params[1:3], params[4:4], params[5:7], params[8:8], params[9:9], _X0)
+    bp = BumpParams(params[10:10], params[11:11], params[12:12], params[13:13])
+    pg, bp
+end
+
+PathGrad(A,zmin,W,φ, ε, X0) = PathGrad(A,zmin,W,φ,ε, X0,2)
+
+function PathGrad(A,zmin,W,φ, ε, X0, d)
+    Xi = X0[1:d] 
+    Xe = X0[d+1:end]
+    ε1 = ε[1:1]
+    w1 = W[1]
+    wf = W[2]
+    w2 = W[3]
+    v = Xe - Xi # vector from start to end
+    v ./= norm(v)
+    #n = nullspace(adjoint(v)) # vector normal to v
+    Rn = [cos(φ[1]) -sin(φ[1]);sin(φ[1]) cos(φ[1])]
+    n = Rn*v
+    # get a covariance matrix with more covariance along `n` than `v`
+    θ = atan(n[2], n[1])
+    R = [cos(θ) -sin(θ);sin(θ) cos(θ)] #Rotation matrix
+
+    w1² = w1*w1
+    Σ = Matrix(Diagonal(w1²./[1.0;ε1.^2]))
+    Σ = R*Σ*R'
+
+    # basin
+    wf² = wf*wf
+    Σb = Matrix(Diagonal(wf²./[1.0;ε1.^2]))
+    Σb = R*Σb*R'
+
+    # end state
+    w2²= w2*w2
+    Σe = [w2² 0.0; 0.0 w2²]
+    PathGrad(A,zmin,W, φ,ε,X0,d,inv(Σ), inv(Σb), inv(Σe), v)
+end
+
+function initial_pos(pg::PathGrad, q, rng=Random.GLOBAL_RNG)
+    A1 = pg.A[2]
+    w1 = pg.W[1]
+    θ0 = atan(pg.v[2], pg.v[1]) # get the angle of the vector
+    φ = pg.φ[1] + θ0 # φ is the angle from the line joining the starting and ending wells.
+    ε1 = pg.ε[1]
+    c = -2*log(pg.zmin[1]/A1)*q
+    a = c*w1
+    b = a/ε1
+    x,y = random_ellipse2(rng, a,b,φ)
+    return x,y
+end
+
+function (pg::PathGrad)(X, b=pg.A[2], zmin=pg.zmin[1], width_scale=1.0)
+    # we want to increase the width, which means decreasing the inverse
+    A0 = pg.A[1]
+    A1 = pg.A[2]
+    Af = pg.A[3]
+    Xi = pg.X0[1:pg.d]
+    Xf = pg.X0[pg.d+1:end]
+
+    Σ1i = pg.Σ0 
+    Σ2i = pg.Σ1
+    Σfi = pg.Σ2
+    _Σ2i = Σ2i./width_scale
+    d1 = Xi-X
+    dd1 = d1'*Σ1i*d1
+    dd2 = d1'*Σ2i*d1
+    z1 = A0*exp(-dd1/2.0)
+    z2 = -A1*exp(-dd2/2.0)
+    if (z2 <= -zmin) &&  (abs(b)/abs(A0) > 0.01)
+        return [0.0, 0.0]
+    end
+    df = Xf - X
+    ddf = df'*Σfi*df
+    zf = -Af*exp(-ddf/2.0) 
+    z1+z2+zf, -z1*(Σ1i + Σ1i')*d1/2 - z2*(_Σ2i + _Σ2i')*d1/2 - zf*(Σfi + Σfi')*df/2
 end
 
 Base.display(x::WaitFig) = Base.display(x.fig)
@@ -198,6 +315,125 @@ function get_trajectory(func::Function, gfunc::Function, X0::Vector{Float64},nfr
     X
 end
 
+sumabs2(x) = sum(abs2, x)
+
+function fit_reaction_time(rtime::Vector{T}, params=rand(13);niter=100, rel_tol=sqrt(eps()),abs_loss=0.0, k=1.0, normalize=false, learning_rate=0.001) where T <: Real
+    nt = length(rtime)
+    rtmax = maximum(rtime)
+
+    function loss(ps)
+        pg,bp = destructure(exp.(ps))
+        Wf = pg.W[3]
+        X0 = pg.X0[end-1:end] # this is the final point
+        rt,pp = get_reaction_time(pg, nt, bp;tmax=1000,k=k)
+        # euclidean distance from the final point
+        dd = map(x->sumabs2(x[end] - X0), pp)
+        dd .-= (k*Wf)^2
+        # slightly hackish
+        dd[dd .< 0.0] .== 0.0
+        gidx = rt .!== nothing
+        rtg = something.(rt[gidx])
+        if !isempty(rtg)
+            rtn = (rtg .- minimum(rtg))./(maximum(rtg) - minimum(rtg))
+        else
+            rtn = rtg
+        end
+        ll = sum(abs2, rtn - rtime[gidx]) + sum(dd[gidx.==false]) 
+        return ll
+    end
+
+
+    q = Flux.Optimise.Adam(learning_rate)
+    L = fill(0.0, niter+1)
+    L[1] = loss(params)
+    prog = Progress(niter)
+    i = 1
+    Lm = 0.0
+    nn = 5
+    ni = 1
+    while i<= niter
+        g = ForwardDiff.gradient(loss,params)
+        Flux.update!(q, params, g)
+        L[1+i] = loss(params)
+        _rel_tol = (L[i] - L[1+i])/L[i]
+        if !isfinite(L[i+1]) || (0.0 <= _rel_tol <= rel_tol) || (L[i+1] <= abs_loss)
+            finish!(prog)
+            break
+        end
+        Lm = ((ni-1)*Lm + L[i+1])/ni
+        ni += 1
+        if ni > nn
+            ni = 1
+        end
+        next!(prog, showvalues=[(:loss, L[i+1]),(:rel_tol, _rel_tol), (:running_av, Lm)])
+        i += 1
+    end
+    L[1:i+1],exp.(params)
+end
+
+function get_reaction_time(pg::PathGrad{T,T2}, nt::T2, args...;kvs...) where T <: Real where T2 <: Integer
+    rt = Vector{Union{Nothing, T}}(undef, nt)
+    ll = Vector{Vector{Vector{T}}}(undef, nt)
+    for i in 1:nt
+        rt[i], ll[i] = get_reaction_time(pg, args...;kvs...)
+    end
+    rt,ll
+end
+
+function get_reaction_time(pg::PathGrad{T,T2}, bump_params::BumpParams;dt=one(T),k=1.0, tmax=1000.0, rebound=false, r0=1.0) where T <: Real where T2 <: Integer
+    Xf = pg.X0[pg.d+1:end]
+    Wf = pg.W[3]
+    nn = round(Int64, tmax/dt)+1
+    X = Vector{Vector{T}}(undef,nn)
+    X[1] = [initial_pos(pg, r0)...] + pg.X0[1:pg.d]
+    # TODO: How to check if we are close enough?
+    # FIXME: This is not accurate, as it using Euclidean distance rather than geodesic
+    stop = false
+    t = zero(T) 
+    b0 = pg.A[2]
+    bump_amp = bump_params.bump_amp[1]
+    zmin_f = bump_params.zmin_f[1]
+    bump_dur = bump_params.bump_dur[1]
+    bump_time = bump_params.bump_time[1]
+    zmin0 = pg.zmin[1]
+    zmin = zmin0
+    b = b0
+    i = 1
+    while !stop
+        fv, Δx = pg(X[i],b,zmin)
+        X[i+1] = X[i] .+ Δx*dt 
+        t += dt
+        i += 1
+        if sqrt(sum(abs2, X[i] - Xf)) <= k*Wf
+            stop = true
+        end
+        if t >= tmax
+            i -= 1
+            stop = true
+        end
+
+        if bump_time <= t < bump_time + bump_dur
+            tb = t - bump_time
+            if rebound
+                half_time = bump_dur/2
+            else
+                half_time = bump_dur
+            end
+            if tb <= half_time
+                b = -(b0 - (b0 - bump_amp)*tb/half_time)
+                zf = -(zmin0 - (zmin0 - zmin_f)*tb/half_time)
+            else
+                b = -(bump_amp - (bump_amp-b0)*(tb-half_time)/bump_dur)
+                zf = -(zmin_f - (zmin_f-zmin0)*(tb-half_time)/bump_dur)
+            end
+        end
+    end
+    if i == nn-1
+        t = nothing
+    end
+    return t,X[1:i]
+end
+
 random_ellipse(a::Real,b::Real, c::Real) = random_ellipse(Random.GLOBAL_RNG, a,b,c)
 
 function random_ellipse(rng::T, a::Real,b::Real, c::Real) where T <: AbstractRNG
@@ -208,6 +444,21 @@ function random_ellipse(rng::T, a::Real,b::Real, c::Real) where T <: AbstractRNG
 end
 
 random_ellipse(Σ::Matrix{T}, c::T) where T <: Real = random_ellipse(Random.GLOBAL_RNG, Σ,c)
+
+random_ellipse2(a::Real, b::Real, θ::Real) = random_ellipse2(Random.GLOBAL_RNG, a, b, θ)
+
+function random_ellipse2(rng, a::Real, b::Real, θ::Real)
+    r = rand(rng)
+    rr = sqrt(r)
+    φ = 2π*rand(rng)
+    xc = rr*cos(φ)
+    yc = rr*sin(φ)
+    xe = a*xc
+    ye = b*yc
+    x = cos(θ)*xe - sin(θ)*ye
+    y = sin(θ)*xe + cos(θ)*ye
+    x,y
+end
 
 function random_ellipse(rng::T2, Σ::Matrix{T}, c::T) where T <: Real where T2 <: AbstractRNG
     ee = eigen(Σ)
@@ -229,12 +480,12 @@ function get_trajectories(func::Function, gfunc::Function, ifunc::Function;kvs..
     rng = get(kvs, :rng, Random.GLOBAL_RNG)
     X0 = Observable([[-5.0, -5.0] + ifunc(r0, rng) for i in 1:ntrials])
     zmin = -1.2*get(kvs, :well_min, 0.0)
-    Xl = Observable(cat([[Point3f(_X0[1], _X0[2], zmin),Point3f(NaN,NaN,NaN)] for _X0 in X0[]]...,dims=1))
+    Xl = Observable(cat([[Point3(_X0[1], _X0[2], zmin),Point3(NaN,NaN,NaN)] for _X0 in X0[]]...,dims=1))
     manifold_params=(bs=bs,b=b,b2=b2,w=w,zf=zf,ϵ=ϵ,X0=X0, rtimes=rtimes)
     get_trajectories!(manifold_params, Xl, func, gfunc, ifunc;kvs...)
 end
 
-function get_trajectories!(manifold_params, Xl::Observable{Vector{Point3f}}, func::Function, gfunc::Function, ifunc::Function;nframes=100,σn=0.0, dt=1.0,
+function get_trajectories!(manifold_params, Xl::Observable{Vector{Point3}}, func::Function, gfunc::Function, ifunc::Function;nframes=100,σn=0.0, dt=1.0,
                                            bump_amp=1.5, max_width_scale=2, bump_time=20, bump_dur=2,well_min=0.0,basin_scale_min=1.0,
                                            b0=5.5,w0=1.0, b20=0.01,b1=7.0, rebound=true, ntrials=1, freeze_before_bump=false,r0=2.0,fname="model_output_new.jld2",
                                            do_save=false,do_record=false,zmin_f=-3.2,zf0=-3.2, ϵf=1.0,ϵ0=2.5, rng=Random.GLOBAL_RNG,
@@ -254,7 +505,7 @@ function get_trajectories!(manifold_params, Xl::Observable{Vector{Point3f}}, fun
         _Xl = Xl[]
         _rtimes = rtimes[]
         for (ii,_x0) in enumerate(_X0)
-            insert!(_Xl,  pidx[ii], Makie.Point3f(_x0[1], _x0[2], zmin))
+            insert!(_Xl,  pidx[ii], Makie.Point3(_x0[1], _x0[2], zmin))
             if sum(abs2, _x0 - [7.0,-13.0]) <= 0.01*35.0
                 if isnan(_rtimes[ii] )
                     _rtimes[ii] = tt
@@ -342,10 +593,10 @@ function animate_manifold(func::Function, gfunc::Function,ifunc;do_save=true, do
     end
     X = lift(b,X0,w,b2,bs,zf,ϵ) do _b,_X0,_w, _b2, _bs, _zf,_ϵ
         frameidx[] = frameidx[] + 1
-        [Makie.Point3f(_X[1], _X[2], func(_X,_b,_w,_b2,_bs,_zf,_ϵ)) for _X in _X0]
+        [Makie.Point3(_X[1], _X[2], func(_X,_b,_w,_b2,_bs,_zf,_ϵ)) for _X in _X0]
     end
 
-    Xl = Observable(cat([[Point3f(_X0[1], _X0[2], zmin),Point3f(NaN,NaN,NaN)] for _X0 in X0[]]...,dims=1))
+    Xl = Observable(cat([[Point3(_X0[1], _X0[2], zmin),Point3(NaN,NaN,NaN)] for _X0 in X0[]]...,dims=1))
 
     fig = Figure(resolution=(1024,768))
     ax = Axis3(fig[1,1], azimuth=4.424342889186364, elevation=0.5030970309174743)
@@ -359,8 +610,8 @@ function animate_manifold(func::Function, gfunc::Function,ifunc;do_save=true, do
     surface!(ax, xx, yy, zz)
     meshscatter!(ax, X,markersize=0.25)
     lines!(ax, Xl,color="black")
-    lpoints = decompose(Point3f, Circle(Point2f(7.0,-13.0), 0.1*sqrt(60/2)))
-    lpoints .+= Point3f(0.0, 0.0, zmin)
+    lpoints = decompose(Point3, Circle(Point2f(7.0,-13.0), 0.1*sqrt(60/2)))
+    lpoints .+= Point3(0.0, 0.0, zmin)
     lines!(ax, lpoints)
     ax2 = Axis(fig[1,2])
     colsize!(fig.layout,1,Relative(0.7))
